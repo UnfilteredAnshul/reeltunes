@@ -1,5 +1,7 @@
 // Shared bottom sheets: Add reel + player. Emoji picker is its own file.
 
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -25,7 +27,9 @@ enum _ExtractionState { idle, running, done }
 class _AddReelSheetState extends State<AddReelSheet> {
   final urlCtrl = TextEditingController();
   final nameCtrl = TextEditingController();
-  String? pickedFolderId;
+  /// Multi-select folder membership; empty set = track lives in "All".
+  /// Choosing a category here is optional by design.
+  final pickedFolders = <String>{};
   _ExtractionState state = _ExtractionState.idle;
   String status = '';
 
@@ -111,38 +115,36 @@ class _AddReelSheetState extends State<AddReelSheet> {
           ),
         ),
         const SizedBox(height: 12),
-        Row(children: [
-          const Text('Folder:'),
-          const SizedBox(width: 8),
-          Expanded(
-            child: DropdownButtonFormField<String?>(
-              initialValue: pickedFolderId,
-              hint: const Text('📁 ReelTune Audios (root)'),
-              items: [
-                const DropdownMenuItem(
-                    value: null, child: Text('📁 ReelTune Audios (root)')),
-                ...AppStore.I.folders
-                    .map((f) => DropdownMenuItem(
-                        value: f.id, child: Text('${f.emoji} ${f.name}'))),
-                const DropdownMenuItem(
-                    value: '__new__', child: Text('➕ New folder…')),
-              ],
-              onChanged: (v) {
-                if (v == '__new__') {
-                  showFolderCreate(context);
-                  return;
-                }
-                setState(() => pickedFolderId = v);
-              },
+        Text('Add to folders (optional — none = shows in All)',
+            style: Theme.of(context).textTheme.bodySmall),
+        const SizedBox(height: 4),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 176),
+          child: ListView(shrinkWrap: true, children: [
+            if (AppStore.I.folders.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: Text('No folders yet — create one below.'),
+              ),
+            for (final f in AppStore.I.folders)
+              CheckboxListTile(
+                dense: true,
+                visualDensity: VisualDensity.compact,
+                value: pickedFolders.contains(f.id),
+                onChanged: (v) => setState(() => v == true
+                    ? pickedFolders.add(f.id)
+                    : pickedFolders.remove(f.id)),
+                title: Text('${f.emoji} ${f.name}'),
+              ),
+            ListTile(
+              dense: true,
+              visualDensity: VisualDensity.compact,
+              leading: const Icon(Icons.create_new_folder_outlined),
+              title: const Text('New folder'),
+              onTap: () => showFolderCreate(context),
             ),
-          ),
-          const SizedBox(width: 8),
-          IconButton(
-            onPressed: () => showFolderCreate(context),
-            tooltip: 'New folder',
-            icon: const Icon(Icons.create_new_folder_outlined),
-          ),
-        ]),
+          ]),
+        ),
         const SizedBox(height: 4),
         TextButton.icon(
           onPressed: importAudioFile,
@@ -173,7 +175,7 @@ class _AddReelSheetState extends State<AddReelSheet> {
     try {
       final t = await Extractor.extractAndAdd(AppStore.I, url,
           title: title,
-          folderIds: [if (pickedFolderId != null) pickedFolderId!],
+          folderIds: pickedFolders.toList(),
           onStatus: (s) => setState(() => status = s));
       if (!mounted) return;
       setState(() => state = _ExtractionState.done);
@@ -275,8 +277,9 @@ class _AddReelSheetState extends State<AddReelSheet> {
 
 /// Opens the create-folder sheet. Bottom sheet (not dialog) — dialogs were
 /// showing only the scrim on the ColorOS device, sheets render reliably.
-void showFolderCreate(BuildContext context) {
-  showModalBottomSheet(
+/// Returns the completion future so a stacked sheet can await it.
+Future<void> showFolderCreate(BuildContext context) {
+  return showModalBottomSheet(
     context: context,
     showDragHandle: true,
     isScrollControlled: true,
@@ -296,7 +299,10 @@ class FolderCreateSheet extends StatefulWidget {
 
 class _FolderCreateSheetState extends State<FolderCreateSheet> {
   final name = TextEditingController();
-  String emoji = '📁';
+  /// Random default: when the user doesn't pick an emoji the app drops one
+  /// on them — the "every folder has an emoji" rule is satisfied from the
+  /// moment the sheet opens (they can still tap a different one).
+  String emoji = emojiPalette[Random().nextInt(emojiPalette.length)];
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -445,6 +451,16 @@ Future<void> showFolderPick(BuildContext context, Track t) {
                         v == true ? picked.add(f.id) : picked.remove(f.id)),
                     title: Text('${f.emoji} ${f.name}'),
                   ),
+                // Manage-folders doubles as a creation point: open the
+                // create-folder sheet ON TOP of this one, refresh when done.
+                ListTile(
+                  leading: const Icon(Icons.create_new_folder_outlined),
+                  title: const Text('New folder'),
+                  onTap: () async {
+                    await showFolderCreate(sheetCtx);
+                    setSheetState(() {});
+                  },
+                ),
               ]),
             ),
           ),
@@ -463,14 +479,182 @@ Future<void> showFolderPick(BuildContext context, Track t) {
 }
 
 // ---------------------------------------------------------------------------
+// Folder menu + emoji editor
+// ---------------------------------------------------------------------------
+
+enum _FolderMenuAction { shuffle, rename, editEmoji, delete }
+
+/// Long-press menu on a category: shuffle / rename / edit emoji / delete.
+Future<void> showFolderMenu(BuildContext context, Folder f) async {
+  final action = await showModalBottomSheet<_FolderMenuAction>(
+    context: context,
+    showDragHandle: true,
+    builder: (sheetCtx) => SafeArea(
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        ListTile(
+          leading: const Icon(Icons.shuffle_outlined),
+          title: const Text('Shuffle'),
+          onTap: () => Navigator.pop(sheetCtx, _FolderMenuAction.shuffle),
+        ),
+        ListTile(
+          leading: const Icon(Icons.edit_outlined),
+          title: const Text('Rename'),
+          onTap: () => Navigator.pop(sheetCtx, _FolderMenuAction.rename),
+        ),
+        ListTile(
+          leading: const Icon(Icons.emoji_emotions_outlined),
+          title: const Text('Edit emoji'),
+          onTap: () => Navigator.pop(sheetCtx, _FolderMenuAction.editEmoji),
+        ),
+        ListTile(
+          leading: Icon(Icons.delete_outline,
+              color: Theme.of(sheetCtx).colorScheme.error),
+          title: Text('Delete',
+              style: TextStyle(
+                  color: Theme.of(sheetCtx).colorScheme.error,
+                  fontWeight: FontWeight.w600)),
+          onTap: () => Navigator.pop(sheetCtx, _FolderMenuAction.delete),
+        ),
+      ]),
+    ),
+  );
+  if (action == null || !context.mounted) return;
+  final store = AppStore.I;
+  switch (action) {
+    case _FolderMenuAction.shuffle:
+      final list =
+          store.tracks.where((t) => t.folderIds.contains(f.id)).toList();
+      if (list.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('"${f.name}" has no audios yet'),
+          behavior: SnackBarBehavior.floating,
+        ));
+      } else {
+        list.shuffle(); // random entry point, then the player shuffles too
+        await RtPlayer.I.play(list.first,
+            context: list, playingFrom: f.name);
+        if (!context.mounted) return;
+        // Bring the player up so the user sees what's playing.
+        await showModalBottomSheet(
+          context: context,
+          showDragHandle: true,
+          useSafeArea: true,
+          builder: (_) => PlayerSheet(
+            track: list.first,
+            contextTracks: const [], // queue already built; sheet renders only
+            startPlayback: false,
+          ),
+        );
+      }
+    case _FolderMenuAction.rename:
+      final ctrl = TextEditingController(text: f.name);
+      if (!context.mounted) return;
+      final name = await showInputSheet(
+        context,
+        title: 'Rename folder',
+        controller: ctrl,
+        confirmLabel: 'Rename',
+      );
+      if (name != null && name.isNotEmpty) store.renameFolder(f.id, name);
+    case _FolderMenuAction.editEmoji:
+      if (!context.mounted) return;
+      final emoji = await showEmojiPickerSheet(context);
+      if (emoji != null) store.setFolderEmoji(f.id, emoji);
+    case _FolderMenuAction.delete:
+      final ok = await showModalBottomSheet<bool>(
+        context: context,
+        showDragHandle: true,
+        builder: (sheetCtx) => Padding(
+          padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment:
+              CrossAxisAlignment.stretch, children: [
+            Text('Delete "${f.name}"?',
+                style: const TextStyle(fontWeight: FontWeight.w600,
+                    fontSize: 18)),
+            const SizedBox(height: 8),
+            Text('The audios inside stay in your library — only this '
+                'grouping is removed.',
+                style: Theme.of(sheetCtx).textTheme.bodySmall),
+            const SizedBox(height: 16),
+            Row(children: [
+              TextButton(
+                  onPressed: () => Navigator.pop(sheetCtx, false),
+                  child: const Text('Cancel')),
+              const Spacer(),
+              FilledButton.icon(
+                style: FilledButton.styleFrom(
+                    backgroundColor: Theme.of(sheetCtx).colorScheme.error,
+                    foregroundColor: Theme.of(sheetCtx).colorScheme.onError),
+                icon: const Icon(Icons.delete_outline),
+                label: const Text('Delete folder'),
+                onPressed: () => Navigator.pop(sheetCtx, true),
+              ),
+            ]),
+          ]),
+        ),
+      );
+      if (ok == true) store.deleteFolder(f.id);
+  }
+}
+
+/// Emoji picker sheet for folder icons.
+Future<String?> showEmojiPickerSheet(BuildContext context) {
+  return showModalBottomSheet<String>(
+    context: context,
+    showDragHandle: true,
+    builder: (sheetCtx) => Padding(
+      padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment:
+          CrossAxisAlignment.start, children: [
+        Text('Pick an emoji',
+            style: Theme.of(sheetCtx)
+                .textTheme
+                .titleLarge
+                ?.copyWith(fontWeight: FontWeight.w600)),
+        const SizedBox(height: 16),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            for (final e in emojiPalette)
+              InkWell(
+                onTap: () => Navigator.pop(sheetCtx, e),
+                borderRadius: BorderRadius.circular(10),
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(10),
+                    color: Theme.of(sheetCtx)
+                        .colorScheme
+                        .surfaceContainerHighest
+                        .withAlpha(120),
+                  ),
+                  child: Text(e, style: const TextStyle(fontSize: 24)),
+                ),
+              ),
+          ],
+        ),
+      ]),
+    ),
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Player sheet
 // ---------------------------------------------------------------------------
 
 class PlayerSheet extends StatefulWidget {
   final Track track;
   final List<Track> contextTracks;
+  /// False when playback (and queue building) is already running — e.g.
+  /// shuffle-played straight from the folder menu. initState then only
+  /// renders, it never re-issues play().
+  final bool startPlayback;
   const PlayerSheet(
-      {super.key, required this.track, required this.contextTracks});
+      {super.key,
+      required this.track,
+      required this.contextTracks,
+      this.startPlayback = true});
   @override
   State<PlayerSheet> createState() => _PlayerSheetState();
 }
@@ -479,6 +663,7 @@ class _PlayerSheetState extends State<PlayerSheet> {
   @override
   void initState() {
     super.initState();
+    if (!widget.startPlayback) return;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await RtPlayer.I.play(widget.track, context: widget.contextTracks);
       final t = AppStore.I.trackById(widget.track.id);
@@ -503,13 +688,19 @@ class _PlayerSheetState extends State<PlayerSheet> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              Text('playing from ${player.playingFrom}',
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodySmall
+                      ?.copyWith(color: scheme.onSurfaceVariant)),
+              const SizedBox(height: 4),
               Text(t.title,
                   textAlign: TextAlign.center,
                   style: Theme.of(context)
                       .textTheme
                       .titleLarge
                       ?.copyWith(fontWeight: FontWeight.w600)),
-              Text('from ${t.source} · audio only',
+              Text('from ${t.source}',
                   style: Theme.of(context).textTheme.bodySmall),
               const SizedBox(height: 8),
               StreamBuilder<Duration>(
@@ -556,6 +747,12 @@ class _PlayerSheetState extends State<PlayerSheet> {
                       selected: player.loop == RtLoop.customRange,
                       onTap: _openRangePicker,
                     ),
+                    const SizedBox(width: 4),
+                    _LoopChip(
+                      label: 'Loop ∞ (forever)',
+                      selected: player.loop == RtLoop.infinite,
+                      onTap: () => player.setLoop(RtLoop.infinite),
+                    ),
                   ],
                 ),
               ),
@@ -563,9 +760,12 @@ class _PlayerSheetState extends State<PlayerSheet> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
+                  // Spotify-style state indication: active when ON (accent
+                  // color). Shuffle is on by design; ∞ pairs with the chip.
                   IconButton(
                       iconSize: 32,
-                      onPressed: () {},
+                      color: player.shuffleOn ? scheme.primary : null,
+                      onPressed: () => player.toggleShuffle(),
                       icon: const Icon(Icons.shuffle_outlined)),
                   IconButton(
                       iconSize: 40,
@@ -591,8 +791,16 @@ class _PlayerSheetState extends State<PlayerSheet> {
                       icon: const Icon(Icons.skip_next_rounded)),
                   IconButton(
                       iconSize: 32,
-                      onPressed: () {},
-                      icon: const Icon(Icons.repeat)),
+                      color: player.loop == RtLoop.infinite
+                          ? scheme.primary
+                          : null,
+                      onPressed: () => player.setLoop(
+                          player.loop == RtLoop.infinite
+                              ? RtLoop.smart
+                              : RtLoop.infinite),
+                      icon: Icon(player.loop == RtLoop.infinite
+                          ? Icons.repeat_on
+                          : Icons.repeat_outlined)),
                 ],
               ),
             ],

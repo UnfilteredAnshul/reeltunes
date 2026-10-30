@@ -44,7 +44,7 @@ class SettingsScreen extends StatelessWidget {
               const ListTile(
                 title: Text('Delete on uninstall'),
                 subtitle: Text(
-                    'Everything ReelTune saves lives inside the app\'s own '
+                    'Everything ReelTunes saves lives inside the app\'s own '
                     'storage. Uninstall and it is gone.'),
               ),
               const _Section('Playback'),
@@ -66,7 +66,7 @@ class SettingsScreen extends StatelessWidget {
               ),
               const _Section('Account'),
               const ListTile(
-                title: Text('ReelTune Pro'),
+                title: Text('ReelTunes Pro'),
                 subtitle: Text('Everything unlocked while we build. '
                     'Trial pricing later: \$2.99/mo · \$19.99/yr.'),
                 trailing: Icon(Icons.verified),

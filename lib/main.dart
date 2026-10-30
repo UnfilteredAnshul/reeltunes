@@ -1,25 +1,24 @@
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
-import 'package:just_audio_background/just_audio_background.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:receive_intent/receive_intent.dart' as ri;
 
 import 'library.dart';
+import 'error_report.dart';
 import 'models.dart';
+import 'player.dart';
 import 'sheets.dart';
 
-void main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  // Media-session service: lock screen / notification / system media widgets.
-  await JustAudioBackground.init(
-    androidNotificationChannelId: 'com.reeltune.app.reel_tune.playback',
-    androidNotificationChannelName: 'ReelTune playback',
-    androidNotificationOngoing: true,
-    androidStopForegroundOnPause: true,
-  );
-  // lazy starter: app opens instantly, store init notifies when ready
+  installErrorReporting(); // failures land in logcat AND as on-screen toasts
+  // App opens INSTANTLY — nothing blocking before runApp().
   runApp(const ReelTuneApp());
+  // Media-session service warms up in the background; RtPlayer guarantees it
+  // has completed before the first play() (see RtPlayer.ensureBackgroundService).
+  RtPlayer.I.ensureBackgroundService();
 }
 
 class ReelTuneApp extends StatefulWidget {
@@ -50,8 +49,9 @@ class _ReelTuneAppState extends State<ReelTuneApp> {
   Widget build(BuildContext context) {
     final store = AppStore.I;
     return MaterialApp(
-      title: 'ReelTune',
+      title: 'ReelTunes',
       debugShowCheckedModeBanner: false,
+      scaffoldMessengerKey: rootMessengerKey,
       theme: _theme(Brightness.light),
       darkTheme: _theme(Brightness.dark),
       themeMode: switch (store.themeMode) {
@@ -77,27 +77,35 @@ class RootScreen extends StatefulWidget {
 }
 
 class _RootScreenState extends State<RootScreen> {
+  bool ready = false;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      // FIRST-RUN ONLY — fires once after install, never every day.
-      await AppStore.I.init();
+      final sw = Stopwatch()..start();
+      const minSplash = Duration(milliseconds: 1400);
+      await Future.wait([
+        AppStore.I.init(),
+        Future.delayed(minSplash), // coin must be visible, even briefly
+      ]);
       _listenShareIntents();
-      if (AppStore.I.firstRunDone || AppStore.I.saveFolder.isNotEmpty) {
-        return;
-      }
       if (!mounted) return;
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (ctx) => const FirstRunDialog(),
-      );
+      if (!AppStore.I.firstRunDone && AppStore.I.saveFolder.isEmpty) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => const FirstRunDialog(),
+        );
+      }
+      if (mounted) setState(() => ready = true);
     });
   }
 
   @override
-  Widget build(BuildContext context) => const LibraryScreen();
+  Widget build(BuildContext context) {
+    return ready ? const LibraryScreen() : const _SplashScreen();
+  }
 
   /// After a share from YouTube / Instagram / TikTok: pick up the shared
   /// link, cold-start or live, and drop the user straight into Add reel.
@@ -128,6 +136,92 @@ class _RootScreenState extends State<RootScreen> {
   }
 }
 
+/// Splash shown while the store loads — just the coin loader, nothing else.
+class _SplashScreen extends StatelessWidget {
+  const _SplashScreen();
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Scaffold(
+      body: Center(
+        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+          const CoinLoader(),
+          const SizedBox(height: 20),
+          Text('warming up your library…',
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: scheme.onSurfaceVariant)),
+        ]),
+      ),
+    );
+  }
+}
+
+/// Coin-style loader: a circle that flips on its edge over and over.
+class CoinLoader extends StatefulWidget {
+  const CoinLoader({super.key});
+  @override
+  State<CoinLoader> createState() => _CoinLoaderState();
+}
+
+class _CoinLoaderState extends State<CoinLoader>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c =
+      AnimationController(vsync: this, duration: const Duration(milliseconds: 1400))..repeat();
+  late final Animation<double> _flip =
+      CurvedAnimation(parent: _c, curve: Curves.easeInOutSine);
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return AnimatedBuilder(
+      animation: _flip,
+      builder: (context, _) {
+        final phase = _flip.value;
+        final scaleX = cos(phase * 2 * pi).abs(); // coin-edge illusion
+        final hop = sin(phase * pi).abs() * 8.0; // little bounce per flip
+        return Transform.translate(
+          offset: Offset(0, -hop),
+          child: Transform(
+            transform: Matrix4.diagonal3Values(scaleX, 1.0, 1.0),
+            alignment: Alignment.center,
+            child: Container(
+              width: 76,
+              height: 76,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: RadialGradient(
+                  colors: [scheme.primaryContainer, scheme.primary],
+                  center: const Alignment(-0.4, -0.4),
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: scheme.primary.withAlpha(90),
+                    blurRadius: 18,
+                    offset: const Offset(0, 6),
+                  ),
+                ],
+              ),
+              alignment: Alignment.center,
+              child: Opacity(
+                opacity: scaleX < 0.25 ? 0.4 : 1.0,
+                child: Icon(Icons.music_note_rounded, color: scheme.onPrimary, size: 38),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
 class FirstRunDialog extends StatefulWidget {
   const FirstRunDialog({super.key});
   @override
@@ -140,7 +234,7 @@ class _FirstRunDialogState extends State<FirstRunDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Where should ReelTune save your audios?'),
+      title: const Text('Where should ReelTunes save your audios?'),
       content: Column(mainAxisSize: MainAxisSize.min, children: [
         const Text(
             'Default: Downloads/ReelTune Audios (created on first save). '

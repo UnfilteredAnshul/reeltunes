@@ -15,7 +15,7 @@ enum AppThemeMode { system, light, dark }
 
 enum ViewMode { list, grid }
 
-enum RtLoop { smart, customRange }
+enum RtLoop { smart, customRange, infinite }
 
 enum SortBy { manual, name, dateAdded }
 
@@ -181,6 +181,20 @@ class AppStore extends ChangeNotifier {
     for (final t in tracks) {
       t.folderIds.remove(id);
     }
+    _persist();
+  }
+
+  void renameFolder(String id, String name) {
+    final f = folderById(id);
+    if (f == null || name.isEmpty || f.name == name) return;
+    f.name = name;
+    _persist();
+  }
+
+  void setFolderEmoji(String id, String emoji) {
+    final f = folderById(id);
+    if (f == null || emoji.isEmpty || f.emoji == emoji) return;
+    f.emoji = emoji;
     _persist();
   }
 

@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:reorderable_grid_view/reorderable_grid_view.dart';
 
 import 'models.dart';
 import 'player.dart';
@@ -26,17 +27,12 @@ class _LibraryScreenState extends State<LibraryScreen> {
         final selected = store.selectedFolderId;
         return Scaffold(
           appBar: AppBar(
-            title: const Text('ReelTune'),
+            title: const Text('ReelTunes'),
             actions: [
               IconButton(
                 tooltip: 'New folder',
                 icon: const Icon(Icons.create_new_folder_outlined),
                 onPressed: () => showFolderCreate(context),
-              ),
-              IconButton(
-                tooltip: 'Add via file',
-                icon: const Icon(Icons.playlist_add),
-                onPressed: _importFile,
               ),
               IconButton(
                 tooltip: 'Settings',
@@ -46,16 +42,32 @@ class _LibraryScreenState extends State<LibraryScreen> {
               ),
             ],
           ),
-          floatingActionButton: FloatingActionButton.extended(
-            onPressed: () => showModalBottomSheet(
-              context: context,
-              showDragHandle: true,
-              useSafeArea: false,
-              isScrollControlled: true,
-              builder: (_) => const AddReelSheet(),
-            ),
-            label: const Text('Add reel'),
-            icon: const Icon(Icons.link),
+          // Two stacked actions: import locally, or add via link.
+          floatingActionButton: Column(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              FloatingActionButton.extended(
+                heroTag: 'importMedia',
+                tooltip: 'Import audio / video files',
+                onPressed: _openImportSheet,
+                icon: const Icon(Icons.folder_open),
+                label: const Text('Import audio'),
+              ),
+              const SizedBox(height: 12),
+              FloatingActionButton.extended(
+                heroTag: 'addReel',
+                onPressed: () => showModalBottomSheet(
+                  context: context,
+                  showDragHandle: true,
+                  useSafeArea: false,
+                  isScrollControlled: true,
+                  builder: (_) => const AddReelSheet(),
+                ),
+                label: const Text('Add reel'),
+                icon: const Icon(Icons.link),
+              ),
+            ],
           ),
           bottomNavigationBar: RtPlayer.I.current == null
               ? null
@@ -145,12 +157,43 @@ class _LibraryScreenState extends State<LibraryScreen> {
     );
   }
 
-  Future<void> _importFile() async {
-    final out = await importAudioFile(context);
-    if (out != null && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Saved to ${out.title}'), behavior: SnackBarBehavior.floating));
-    }
+  /// Import intake: pick files (audio AND video) or a whole folder of
+  /// videos. Videos play their audio track directly — the file is never
+  /// touched: not copied, not deleted, zero storage waste.
+  Future<void> _openImportSheet() async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (c) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(
+            leading: const Icon(Icons.audiotrack_outlined),
+            title: const Text('Import files (audio or video)'),
+            subtitle: const Text(
+                'Videos play as audio — nothing is copied or moved',
+                style: TextStyle(fontSize: 12)),
+            onTap: () => Navigator.pop(c, 'files'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.video_library_outlined),
+            title: const Text('Import a folder of videos'),
+            subtitle: const Text(
+                'Every video in the folder becomes an audio track',
+                style: TextStyle(fontSize: 12)),
+            onTap: () => Navigator.pop(c, 'folder'),
+          ),
+        ]),
+      ),
+    );
+    if (choice == null || !mounted) return;
+    final n = choice == 'files'
+        ? await importMediaFiles()
+        : await importMediaFolder();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(n == 0 ? 'No media found there' : 'Imported $n audios'),
+      behavior: SnackBarBehavior.floating,
+    ));
   }
 }
 
@@ -202,6 +245,8 @@ class _FolderStrip extends StatelessWidget {
                 onTap: () {
                   if (i == chips.length - 1) {
                     showFolderCreate(context);
+                  } else if (i > 0) {
+                    showFolderMenu(context, store.folders[i - 1]);
                   } else {
                     store.selectFolder(chips[i].$1);
                   }
@@ -273,6 +318,7 @@ class _FoldersList extends StatelessWidget {
             onTap: () {
               store.selectFolder(f.id);
             },
+            onLongPress: () => showFolderMenu(c, f),
           ),
         );
       },
@@ -297,63 +343,82 @@ class _FoldersGrid extends StatelessWidget {
     final store = AppStore.I;
     return SliverPadding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
-      sliver: SliverGrid(
-        delegate: SliverChildBuilderDelegate(
-          (context, i) {
-            if (i == store.folders.length) {
-              final scheme = Theme.of(context).colorScheme;
-              return Card(
-                color: scheme.surfaceContainerHighest.withAlpha(120),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12)),
-                child: InkWell(
-                  onTap: () => showFolderCreate(context),
-                  child: const Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text('➕', style: TextStyle(fontSize: 30)),
-                      SizedBox(height: 6),
-                      Text('New folder'),
-                    ],
-                  ),
-                ),
+      sliver: SliverToBoxAdapter(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          ReorderableGridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                maxCrossAxisExtent: 150,
+                mainAxisExtent: 110,
+                crossAxisSpacing: 8,
+                mainAxisSpacing: 8),
+            onReorder: (o, n) => store.reorderFolders(o, n),
+            itemCount: store.folders.length,
+            itemBuilder: (c, i) {
+              final f = store.folders[i];
+              return KeyedSubtree(
+                key: ValueKey(f.id),
+                child: _folderCard(c, store, f, store.selectedFolderId == f.id),
               );
-            }
-            final f = store.folders[i];
-            final selected = store.selectedFolderId == f.id;
-            final scheme = Theme.of(context).colorScheme;
-            return Card(
-              color: selected ? scheme.primaryContainer : null,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  side: selected
-                      ? BorderSide(color: scheme.primary, width: 1.5)
-                      : BorderSide.none),
-              child: InkWell(
-                onTap: () {
-                  store.selectFolder(selected ? null : f.id);
-                },
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(f.emoji, style: const TextStyle(fontSize: 30)),
-                    const SizedBox(height: 6),
-                    Text(f.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                    Text(
-                        '${store.tracks.where((t) => t.folderIds.contains(f.id)).length} audios',
-                        style: Theme.of(context).textTheme.bodySmall),
-                  ],
-                ),
-              ),
-            );
-          },
-          childCount: store.folders.length + 1,
+            },
+          ),
+          const SizedBox(height: 8),
+          _newFolderCard(context),
+        ]),
+      ),
+    );
+  }
+
+  Widget _folderCard(
+      BuildContext context, AppStore store, Folder f, bool selected) {
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      color: selected ? scheme.primaryContainer : null,
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: selected
+              ? BorderSide(color: scheme.primary, width: 1.5)
+              : BorderSide.none),
+      child: InkWell(
+        onTap: () {
+          store.selectFolder(selected ? null : f.id);
+        },
+        onLongPress: () => showFolderMenu(context, f),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(f.emoji, style: const TextStyle(fontSize: 30)),
+            const SizedBox(height: 6),
+            Text(f.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+            Text(
+                '${store.tracks.where((t) => t.folderIds.contains(f.id)).length} audios',
+                style: Theme.of(context).textTheme.bodySmall),
+          ],
         ),
-        gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-            maxCrossAxisExtent: 150,
-            mainAxisExtent: 110,
-            crossAxisSpacing: 8,
-            mainAxisSpacing: 8),
+      ),
+    );
+  }
+
+  Widget _newFolderCard(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      color: scheme.surfaceContainerHighest.withAlpha(120),
+      shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: InkWell(
+        onTap: () => showFolderCreate(context),
+        child: const SizedBox(
+          height: 96,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text('➕', style: TextStyle(fontSize: 30)),
+              SizedBox(height: 6),
+              Text('New folder'),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -423,16 +488,22 @@ class _TracksView extends StatelessWidget {
     if (store.trackView == ViewMode.grid) {
       return SliverPadding(
         padding: const EdgeInsets.symmetric(horizontal: 16),
-        sliver: SliverGrid(
-          delegate: SliverChildBuilderDelegate(
-            (c, i) => _TrackCard(track: list[i], onTap: () => _play(list[i], c)),
-            childCount: list.length,
+        sliver: SliverToBoxAdapter(
+          child: ReorderableGridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                maxCrossAxisExtent: 160,
+                mainAxisExtent: 150,
+                crossAxisSpacing: 8,
+                mainAxisSpacing: 8),
+            onReorder: (o, n) => store.reorderVisibleTracks(o, n),
+            itemCount: list.length,
+            itemBuilder: (c, i) => KeyedSubtree(
+              key: ValueKey(list[i].id),
+              child: _TrackCard(track: list[i], onTap: () => _play(list[i], c)),
+            ),
           ),
-          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 160,
-              mainAxisExtent: 150,
-              crossAxisSpacing: 8,
-              mainAxisSpacing: 8),
         ),
       );
     }
@@ -479,6 +550,7 @@ class _TrackCard extends StatelessWidget {
     return Card(
       child: InkWell(
         onTap: onTap,
+        onLongPress: () => _trackMenu(context, track),
         child: Padding(
           padding: const EdgeInsets.all(10),
           child: Column(
@@ -670,8 +742,15 @@ Future<void> deleteTrackWithConfirm(BuildContext context, Track t) async {
     );
     if (ok != true || !context.mounted) return;
   }
+  // Delete semantics: library-OWNED files (extracted audio, copied imports)
+  // live inside the save root and are deleted from disk with the track.
+  // Reference-imported files (the user's own videos) are NEVER deleted from
+  // their original location — removing from the library only unlists them.
+  final root = store.saveFolderWithRoot();
   try {
-    File(t.path).deleteSync();
+    if (root != null && t.path.startsWith(root)) {
+      File(t.path).deleteSync();
+    }
   } catch (_) {}
   store.removeTrack(t.id);
   RtPlayer.I.removeIfCurrent(t.id);
@@ -686,35 +765,66 @@ class MiniBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final player = RtPlayer.I;
+    final durMs = player.duration?.inMilliseconds ?? track.durationMs;
     return ListenableBuilder(
-      listenable: RtPlayer.I,
+      listenable: player,
       builder: (context, _) => SafeArea(
         child: Card(
           margin: const EdgeInsets.fromLTRB(12, 0, 12, 4),
-          child: ListTile(
-            dense: true,
-            onTap: onTap,
-            leading: Container(
-              width: 38,
-              height: 38,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(8),
-                color: scheme.surfaceContainerHighest,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                dense: true,
+                onTap: onTap,
+                leading: Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(8),
+                    color: scheme.surfaceContainerHighest,
+                  ),
+                  child:
+                      Icon(Icons.music_note, color: scheme.onSurfaceVariant),
+                ),
+                title: Text(track.title,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w600)),
+                subtitle: StreamBuilder<Duration>(
+                  stream: player.positionStream,
+                  builder: (c, pos) => Text(
+                    '${mmss((pos.data ?? Duration.zero).inMilliseconds)} / '
+                    '${durMs > 0 ? mmss(durMs) : '—'}',
+                    style: Theme.of(context).textTheme.labelSmall,
+                  ),
+                ),
+                // Engine-stream-driven so the pause/play glyph flips the
+                // instant playback state changes (never a stale ▶).
+                trailing: StreamBuilder<bool>(
+                  stream: player.playingStream,
+                  initialData: player.playing,
+                  builder: (c, s) => IconButton(
+                    onPressed: () => player.toggle(),
+                    icon: Icon(
+                        (s.data ?? false)
+                            ? Icons.pause_rounded
+                            : Icons.play_arrow_rounded,
+                        color: scheme.onSurface),
+                  ),
+                ),
               ),
-              child:
-                  Icon(Icons.music_note, color: scheme.onSurfaceVariant),
-            ),
-            title: Text(track.title,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontWeight: FontWeight.w600)),
-            trailing: IconButton(
-              onPressed: () => RtPlayer.I.toggle(),
-              icon: Icon(
-                  RtPlayer.I.playing
-                      ? Icons.pause_rounded
-                      : Icons.play_arrow_rounded,
-                  color: scheme.onSurface),
-            ),
+              StreamBuilder<Duration>(
+                stream: player.positionStream,
+                builder: (c, pos) {
+                  final p = pos.data?.inMilliseconds ?? 0;
+                  return LinearProgressIndicator(
+                    value: durMs > 0 ? (p / durMs).clamp(0.0, 1.0) : 0,
+                    minHeight: 2,
+                  );
+                },
+              ),
+            ],
           ),
         ),
       ),
@@ -723,8 +833,72 @@ class MiniBar extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Import pipeline (real for local files; URL extraction comes later)
+// Import pipeline
 // ---------------------------------------------------------------------------
+
+/// Media extensions we accept on local import. Video files are played as
+/// their audio track (the player reads the audio layer only) — no transcode,
+/// no extraction, no extra storage.
+const _audioExtensions = ['mp3', 'm4a', 'aac', 'wav', 'ogg', 'oga', 'opus', 'flac'];
+const _videoExtensions = ['mp4', 'mkv', 'webm', 'avi', 'm4v', 'mov', '3gp'];
+const _mediaExtensions = [..._audioExtensions, ..._videoExtensions];
+
+bool _isMediaPath(String p) {
+  final ext = p.split('.').last.toLowerCase();
+  return _mediaExtensions.contains(ext);
+}
+
+/// Reference-import a file: the Track points AT the original file. Nothing
+/// is copied — so importing 200 videos from your device adds zero bytes.
+Track _trackFromPath(String path) {
+  final ext = path.split('.').last.toLowerCase();
+  final clean = path.split(Platform.pathSeparator).last
+      .replaceAll(RegExp(r'\.[a-z0-9]+$', caseSensitive: false), '')
+      .trim();
+  return Track(
+    id: _trackId(),
+    title: clean,
+    source: _videoExtensions.contains(ext) ? 'video' : 'file',
+    path: path,
+    folderIds: const [],
+    addedAtMs: DateTime.now().millisecondsSinceEpoch,
+  );
+}
+
+/// Pick files (audio or video). Returns how many were imported.
+Future<int> importMediaFiles() async {
+  final files = await FilePicker.pickFiles(
+      type: FileType.custom, allowedExtensions: _mediaExtensions);
+  final paths = files
+      .map((f) => f.path)
+      .whereType<String>()
+      .where(_isMediaPath)
+      .toList();
+  final store = AppStore.I;
+  for (final p in paths) {
+    store.addTrack(_trackFromPath(p));
+  }
+  return paths.length;
+}
+
+/// Pick an entire folder and import every media file it contains (top
+/// level — the user's videos folder is usually flat).
+Future<int> importMediaFolder() async {
+  final dir = await FilePicker.getDirectoryPath();
+  if (dir == null) return 0;
+  final entries = Directory(dir)
+      .listSync()
+      .whereType<File>()
+      .map((f) => f.path)
+      .where(_isMediaPath)
+      .toList()
+    ..sort();
+  final store = AppStore.I;
+  for (final p in entries) {
+    store.addTrack(_trackFromPath(p));
+  }
+  return entries.length;
+}
 
 Future<Track?> importAudioFile([BuildContext? context]) async {
   final picked = (await FilePicker.pickFiles(type: FileType.audio)).firstOrNull;

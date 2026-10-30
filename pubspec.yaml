@@ -19,6 +19,7 @@ dependencies:
   just_audio_background: ^0.0.1-beta.17
   receive_intent: ^0.2.8
   audio_session: ^0.2.4
+  reorderable_grid_view: ^2.2.8
 
 dev_dependencies:
   flutter_test:
@@ -27,3 +28,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/logo.png
