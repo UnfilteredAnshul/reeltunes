@@ -33,6 +33,13 @@ class Entitlements extends ChangeNotifier {
   String? _productId;
   bool _debugPro = false;
 
+  /// Pro time granted by a promo/creator code (`lib/promo.dart`). Kept
+  /// separate from the store fields on purpose: a code grant must never look
+  /// like a Play purchase, and clearing one must not touch the other.
+  DateTime? _grantUntil;
+  bool _grantLifetime = false;
+  String? _grantCode;
+
   /// Offline allowance past the store's expiry date. Play renews silently, so a
   /// phone that is offline at renewal should not drop to Free mid-commute; a
   /// genuinely cancelled plan still reverts, just a few days later.
@@ -54,6 +61,12 @@ class Entitlements extends ChangeNotifier {
     }
     _productId = prefs.getString('proProductId');
     _debugPro = prefs.getBool('debugPro') ?? false;
+    _grantLifetime = prefs.getBool('grantLifetime') ?? false;
+    final grantMs = prefs.getInt('grantUntilMs');
+    if (grantMs != null && grantMs > 0) {
+      _grantUntil = DateTime.fromMillisecondsSinceEpoch(grantMs);
+    }
+    _grantCode = prefs.getString('grantCode');
   }
 
   void _changed() => notifyListeners();
@@ -133,7 +146,30 @@ class Entitlements extends ChangeNotifier {
 
   String? get productId => _productId;
 
-  bool get isPro => purchased || _debugPro || trialActive;
+  /// True while a redeemed code is still paying for Pro.
+  bool get codeGrantActive {
+    if (_grantLifetime) return true;
+    final end = _grantUntil;
+    if (end == null) return false;
+    return DateTime.now().isBefore(end);
+  }
+
+  /// End of the code grant, or null for a lifetime code / no grant.
+  DateTime? get codeGrantUntil => codeGrantActive ? _grantUntil : null;
+
+  String? get codeGrantCode => codeGrantActive ? _grantCode : null;
+
+  bool get codeGrantLifetime => codeGrantActive && _grantLifetime;
+
+  bool get isPro => purchased || _debugPro || codeGrantActive || trialActive;
+
+  /// The end a new code should extend from: an active grant, else now.
+  DateTime get codeGrantBase {
+    if (codeGrantActive && !_grantLifetime && _grantUntil != null) {
+      return _grantUntil!;
+    }
+    return DateTime.now();
+  }
 
   /// True once the trial is over and nothing is bought.
   bool get capped => !isPro;
@@ -166,7 +202,9 @@ class Entitlements extends ChangeNotifier {
   /// 3 or 1 on the day a nudge is due, otherwise null. Each one is shown once,
   /// which is why the day is stored rather than a plain bool.
   int? get dueTrialReminder {
-    if (purchased || _debugPro || _trialStartedAt == null) return null;
+    if (purchased || _debugPro || codeGrantActive || _trialStartedAt == null) {
+      return null;
+    }
     final prefs = _prefs;
     if (prefs == null) return null;
     final days = trialDaysLeft;
@@ -226,6 +264,77 @@ class Entitlements extends ChangeNotifier {
     _changed();
   }
 
+  /// Writes/extends a code grant. [until] is ignored for a lifetime grant.
+  Future<void> setCodeGrant({
+    DateTime? until,
+    required String code,
+    bool lifetime = false,
+  }) async {
+    if (!lifetime && until == null) return;
+    _grantLifetime = lifetime;
+    _grantUntil = lifetime ? null : until;
+    _grantCode = code;
+    final p = _prefs;
+    if (p != null) {
+      if (_grantUntil == null) {
+        await p.remove('grantUntilMs');
+      } else {
+        await p.setInt('grantUntilMs', _grantUntil!.millisecondsSinceEpoch);
+      }
+      await p.setBool('grantLifetime', _grantLifetime);
+      await p.setString('grantCode', code);
+      // A grant retires the trial-end nudges; nagging a user who just got
+      // free Pro is how you get uninstalled.
+      await p.remove('reminderShown3');
+      await p.remove('reminderShown1');
+    }
+    _changed();
+  }
+
+  Future<void> clearCodeGrant() async {
+    _grantUntil = null;
+    _grantLifetime = false;
+    _grantCode = null;
+    final p = _prefs;
+    if (p != null) {
+      await p.remove('grantUntilMs');
+      await p.remove('grantLifetime');
+      await p.remove('grantCode');
+    }
+    _changed();
+  }
+
+  /// The mirror copy written into `.reeltunes-library.json`, so a reinstall
+  /// keeps Pro time the user already earned. Only the grant travels — the
+  /// code registry itself is device data and is rebuilt from the server later.
+  Map<String, dynamic>? get codeGrantMirror => codeGrantActive
+      ? {
+          'untilMs': _grantUntil?.millisecondsSinceEpoch,
+          'lifetime': _grantLifetime,
+          'code': _grantCode,
+        }
+      : null;
+
+  /// Adopts a mirror grant only when it ends later than the local one, so a
+  /// stale file can never shorten paid time.
+  Future<void> adoptCodeGrant({
+    int? untilMs,
+    bool lifetime = false,
+    String? code,
+  }) async {
+    if (lifetime) {
+      if (_grantLifetime) return;
+      await setCodeGrant(lifetime: true, code: code ?? 'MIRROR');
+      return;
+    }
+    if (untilMs == null || untilMs <= 0) return;
+    final incoming = DateTime.fromMillisecondsSinceEpoch(untilMs);
+    if (!incoming.isAfter(DateTime.now())) return;
+    final current = codeGrantActive && !_grantLifetime ? _grantUntil : null;
+    if (current != null && !incoming.isAfter(current)) return;
+    await setCodeGrant(until: incoming, code: code ?? 'MIRROR');
+  }
+
   /// Debug-only shortcut (and the pre-store fallback in the paywall).
   Future<void> setPurchased(bool v) async {
     await setStoreEntitlement(active: v);
@@ -283,6 +392,11 @@ class Entitlements extends ChangeNotifier {
       return 'Pro · ends ${_shortDate(end)}';
     }
     if (_debugPro) return 'Pro (debug)';
+    if (codeGrantActive) {
+      if (_grantLifetime) return 'Pro · lifetime code';
+      final end = _grantUntil!;
+      return 'Pro · code until ${_shortDate(end)}';
+    }
     if (_trialStartedAt == null) return 'Trial not started';
     if (!trialActive) return 'Free';
     final d = trialDaysLeft;

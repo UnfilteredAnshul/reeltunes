@@ -1,8 +1,10 @@
-# ReelTunes — Codes, referrals & admin dashboard (plan, not shipped)
+# ReelTunes — Codes, referrals & admin dashboard
 
-> Companion to `free-vs-pro.md`. Nothing here is built yet.
-> All of it lives on the same Cloudflare Worker as the entitlement service, so
-> there is still **one backend, one bill (₹0), one dashboard.**
+> Companion to `free-vs-pro.md`.
+> **Phase 1 is shipped** (local engine, in-app dashboard): see §12. The rest of
+> this document is the server design it will move onto, unchanged.
+> All of it will live on the same Cloudflare Worker as the entitlement service,
+> so there is still **one backend, one bill (₹0), one dashboard.**
 
 ## 0. Trial → cap → shop (the timeline this plugs into)
 
@@ -234,10 +236,12 @@ economy health (coins minted vs spent). Don't build before you have numbers.
 ## 10. Build order (after the Pro/coins work)
 
 1. D1 schema + `/redeem` + `/entitlement` sharing one signer.
-2. App: "Redeem code" screen in Settings, wired to the same `Entitlements`.
-3. Dashboard: codes list + create + revoke.
+2. ✅ **App: "Redeem code" sheet, wired to `Entitlements`** — shipped locally
+   (§12), same call site for the server.
+3. ✅ **Dashboard: codes list + create + revoke** — shipped in-app; the web
+   version is still to build.
 4. Creators + campaigns views.
-5. Master device allowlist.
+5. Master device allowlist (the current master code is debug-only).
 6. Rate limits + Play Integrity check on `/redeem`.
 7. Analytics: redemptions per day, per campaign.
 
@@ -250,3 +254,64 @@ economy health (coins minted vs spent). Don't build before you have numbers.
 4. **Campaign name + size** for the first-1000 run.
 5. **Redeemer reward for creator codes** — 30 days Pro? Longer = more incentive
    for the creator, more free Pro for strangers.
+
+---
+
+## 12. Phase 1 — shipped local engine (2026-11-03)
+
+No Worker, no D1, no network. The phone is the server, which is enough to test
+every redeem, grant, expiry and dashboard flow end to end.
+
+| File | Job |
+|---|---|
+| `lib/promo.dart` | `PromoEngine`: registry, redemption log, normalise, validate, grant. The single call the UI makes is `redeem()`. |
+| `lib/redeem_sheet.dart` | Bottom sheet: code field → `PromoEngine.redeem()` → sentence. No other logic. |
+| `lib/code_admin.dart` | In-app dashboard: status card, built-ins, codes list (copy/revoke/delete), create sheet, redemption log, danger zone. |
+| `lib/entitlements.dart` | New, separate grant fields (`grantUntilMs`, `grantLifetime`, `grantCode`) and `codeGrantActive`. `isPro` now = store **or** debug **or** grant **or** trial. |
+| `lib/library_sync.dart` | Mirrors `grant` next to `trialStartMs`, adopts it on reinstall. |
+
+### Codes available now
+
+| Code | What it does | Build |
+|---|---|---|
+| **`ANSHUL2012`** | Lifetime Pro on this device, and unlocks the dashboard | debug only |
+| **`FREEVERSION`** | Clears store state, debug flag, grant **and ends the trial** → real Free tier (caps + ads) | debug only |
+| `RT` + 8 chars | Any code created in the dashboard | any build |
+
+Both built-ins sit in a `kDebugMode` branch, so `flutter build apk --release`
+compiles them out. A release build gets its master behaviour from `/redeem` +
+an SSAID allowlist instead — the APK never carries the string.
+
+### How to test right now
+
+1. Settings → **Redeem a code** → `ANSHUL2012` → Pro card flips to "Pro ·
+   lifetime code", ads flag off, caps lifted.
+2. Settings → **Code dashboard** → New → 1 day Pro, max uses 3, custom code
+   `TEST1` → copy it.
+3. `FREEVERSION` → back to Free (trial retired too, so caps and ads are real).
+4. Redeem `TEST1` → Pro until tomorrow; redeem it again → "Already used on this
+   device".
+5. Dashboard → revoke `TEST1` → a second phone (or cleared log) gets "That code
+   was switched off".
+6. Reinstall the app, re-link the folder → the grant comes back from
+   `.reeltunes-library.json`.
+
+### Storage and what it deliberately does not do
+
+- Prefs: `promoCodes`, `promoLog`, `promoDeviceId`, `adminUnlocked`; the grant
+  itself lives in the entitlement keys, not in the code store.
+- The mirror is a plain file in the user's folder, so a determined user can edit
+  `grant.untilMs` and give themselves Pro. Accepted for now: the alternative is
+  a server round trip on every launch. The server phase signs the grant
+  (Ed25519) and the mirror becomes a cache, not an authority.
+- No rate limiting yet — brute force of `RT…` (32^8) is already hopeless, and
+  the local log is only a test aid. `/redeem` will add 5/hour and 20/day.
+- Creators, referrals, campaign burn and master-device allowlists are **not** in
+  phase 1; they need the shared database.
+
+### What changes when the Worker lands
+
+Only `PromoEngine.redeem()` gains a network branch (POST `/redeem` →
+`{plan, exp, signedEntitlement}`), and `code_admin.dart` switches its list from
+the local registry to `GET /admin/codes`. The UI, the bottom sheet, the
+`Entitlements` fields and the mirror format stay exactly as they are.

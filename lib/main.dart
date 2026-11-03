@@ -10,6 +10,7 @@ import 'library.dart';
 import 'library_sync.dart';
 import 'models.dart';
 import 'player.dart';
+import 'promo.dart';
 import 'sheets.dart';
 
 void main() {
@@ -82,7 +83,9 @@ class _RootScreenState extends State<RootScreen>
       const minSplash = Duration(milliseconds: 1400);
       await Future.wait([
         AppStore.I.init(),
-        Entitlements.I.init(),
+        // Promo codes read the plan, so they load after entitlements without
+        // holding up the other two.
+        Entitlements.I.init().then((_) => PromoEngine.I.init()),
         Future.delayed(minSplash), // coin must be visible, even briefly
       ]);
       // Load the audios folder grant, restore a mirror after a reinstall and

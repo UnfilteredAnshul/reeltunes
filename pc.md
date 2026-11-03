@@ -4,7 +4,7 @@
 - **Name:** ReelTunes · `applicationId com.buildwithanshul.reeltunes` (permanent — cannot change after the first Play upload) · Dart package `reel_tune` · project folder `E:\Projects\ReelTune`.
 - **What it is:** Android Flutter music player for short-form video audio. Paste a TikTok / Instagram Reel / YouTube Shorts link → audio is extracted **on-device** by a bundled CPython + yt-dlp engine → the file is written into the user's own audios folder and played offline with loop/shuffle controls. Also imports existing phone media through SAF (videos play their own audio, nothing copied).
 - **Pitch:** 100% on-device library. No cloud, no login, no server, no database. The audios folder is the source of truth: drop a song in with a file manager and it appears; uninstall the app and the files plus a portable copy of the playlists stay behind.
-- **Status (2026-11-03):** debug build installed and clean-launching on a Realme RMX3381 (ColorOS, Android 13 / SDK 33). Engine runs end-to-end (Python → SSL → yt-dlp 2026.10.26). Since the last doc: free/Pro gating is implemented (`lib/entitlements.dart` — trial clock, 25 audios / 2 playlists, Smart 3–6, custom-range paywall, 3-day and 1-day trial reminders, debug tier switches) and RevenueCat billing is wired (`lib/billing.dart` + paywall/Settings). **Not built since these changes; no device test yet.**
+- **Status (2026-11-03):** **debug build with free/Pro gating, RevenueCat billing and promo codes was built (156.9 MB) and installed over wireless adb** (`adb-PBFIINYP7LGE4PPV-Sgk2he._adb-tls-connect._tcp`) on the Realme RMX3381 (ColorOS, Android 13 / SDK 33); it launches to the library. Engine still runs end-to-end (Python → SSL → yt-dlp 2026.10.26). Since the last doc: free/Pro gating (`lib/entitlements.dart` — trial clock, 25 audios / 2 playlists, Smart 3–6, custom-range paywall, 3-day and 1-day trial reminders, debug tier switches), RevenueCat billing (`lib/billing.dart` + paywall/Settings), and **promo codes phase 1** (`lib/promo.dart` + `lib/redeem_sheet.dart` + `lib/code_admin.dart`: local registry, redemption log, in-app dashboard, `ANSHUL2012` / `FREEVERSION` debug codes, signed-server swap planned in `docs/promo-codes.md` §12). **Device test of the new screens pending.**
 - **Production status:** internal debug only. No release signing, no AAB, no ads, no Play Console products, no privacy policy yet. See "Production readiness (open)".
 
 ## Tech Stack
@@ -38,8 +38,8 @@ No SQL. Two local stores + one mirrored file:
    - `path` is a **`content://` URI** (audios folder or SAF import) — no raw paths since the SAF change.
    - `fileName` is the bridge between the folder and the library, and the key used by the mirror/restore.
    - `source`: `'TikTok' | 'YouTube' | 'Instagram' | 'web'` (extracted) · `'file' | 'video'` (imported).
-2. **`.reeltunes-library.json`** inside the audios folder — portable mirror (folders + `{name,title,source,durationMs,addedAtMs,folderIds}`). Written ~700 ms after every library change; read back on the first launch after a reinstall, matched to files by name.
-3. **SharedPreferences:** `themeMode`, `folderView`, `trackView`, `saveFolder` (legacy display string), `firstRunDone`, `rangeMin/rangeMax`, `confirmDelete(true)`, `playDuringCalls`, `sortBy`, `sortAsc`, `guideBannerDismissed`, `playlistsExpanded` (session), `loopHistory` (last 12 custom-range counts), **`hiddenFileNames`** (files removed with "Remove from ReelTunes" — stops a folder scan from re-adding them).
+2. **`.reeltunes-library.json`** inside the audios folder — portable mirror (folders + `{name,title,source,durationMs,addedAtMs,folderIds}` + `trialStartMs` + `grant {untilMs,lifetime,code}`). Written ~700 ms after every library change and after a code redeem; read back on the first launch after a reinstall, matched to files by name.
+3. **SharedPreferences:** `themeMode`, `folderView`, `trackView`, `saveFolder` (legacy display string), `firstRunDone`, `rangeMin/rangeMax`, `confirmDelete(true)`, `playDuringCalls`, `sortBy`, `sortAsc`, `guideBannerDismissed`, `playlistsExpanded` (session), `loopHistory` (last 12 custom-range counts), **`hiddenFileNames`** (files removed with "Remove from ReelTunes" — stops a folder scan from re-adding them), `trialStartMs`, `proPurchased/proTrial/proWillRenew/proEndsMs/proProductId`, **`grantUntilMs/grantLifetime/grantCode`** (code grants), `promoCodes`, `promoLog`, `promoDeviceId`, `adminUnlocked`.
    - Android-side prefs (`reeltunes_folder`): SAF tree URI + resolved root document id.
    - Not persisted on purpose: search text, date filter.
 
@@ -105,7 +105,15 @@ None. `AppStore.I.fullPro` is hard-coded `true`; free/Pro gating contract in `pl
 ### lib/main.dart
 - `main()` (instant `runApp`, error reporting, deferred audio-service warm-up), `RootScreen` (splash, `LibrarySync`, `Billing.init()` after the library is up, first-run sheet, share intents, lifecycle re-scan + `Billing.refresh()`), `FirstRunSheet`, `CoinLoader`.
 ### lib/settings_screen.dart
-- Guide card, appearance radios, storage block (link folder / re-scan / uninstall copy), playback switches, feedback mailto, live Pro card (`ListenableBuilder` on `Entitlements`), "Restore purchases" row, debug tier section.
+- Guide card, appearance radios, storage block (link folder / re-scan / uninstall copy), playback switches, feedback mailto, live Pro card (`ListenableBuilder` on `Entitlements`), "Redeem a code" row, "Code dashboard" row (debug builds, or once a master code unlocked the device), "Restore purchases" row, debug tier section.
+### lib/promo.dart
+- `PromoEngine` (ChangeNotifier singleton): normalise (`uppercase`, strip `space - _`), local code registry (`promoCodes`), redemption log (`promoLog`, 500 rows), per-device once check on `promoDeviceId`, grant application through `Entitlements.setCodeGrant`. Built-ins `ANSHUL2012` (lifetime Pro + unlocks dashboard) and `FREEVERSION` (clears store/debug/grant **and** ends the trial) are inside `kDebugMode` branches, so release builds compile them out. `createCode/setRevoked/deleteCode/revokeAll/clearLog`. `redeem()` is the single UI entry point and the future `/redeem` swap point.
+### lib/redeem_sheet.dart
+- `showRedeemSheet` — code field (uppercase, 24 chars), busy state, inline error, success pops with a `PromoResult` the caller toasts. Copies the "codes add time, Play owns price" rule into the UI.
+### lib/code_admin.dart
+- `CodeDashboardScreen` — status card (plan, grant source/end, live codes, redemptions, device tag), built-ins (copy), codes list (copy on tap; menu: revoke/switch on, delete), create sheet (type, custom code, days, max uses, valid-for days, campaign, notes), redemption log, danger zone (revoke all, clear log).
+### lib/entitlements.dart (code grants)
+- `codeGrantActive`, `codeGrantUntil/Code/Lifetime`, `setCodeGrant`, `clearCodeGrant`, `adoptCodeGrant`, `codeGrantMirror`. `isPro` = purchased || debugPro || codeGrantActive || trialActive; `showAds`/caps derive from it, so a code is enough to test both tiers. Grants suppress trial reminders.
 ### lib/error_report.dart
 - `rootMessengerKey`, `reportError` (debugPrint + microtask-deferred single toast), `installErrorReporting`.
 ### Android
@@ -120,13 +128,14 @@ None. `AppStore.I.fullPro` is hard-coded `true`; free/Pro gating contract in `pl
 ```powershell
 cd E:\Projects\ReelTune
 flutter analyze                      # gate: zero errors (12 pre-existing infos/warnings)
-flutter build apk --debug            # ~133 MB, 3 ABIs
+flutter build apk --debug            # ~157 MB, 3 ABIs
 $adb = "E:\Android\Sdk\platform-tools\adb.exe"
-& $adb -s PBFIINYP7LGE4PPV install -r build\app\outputs\flutter-apk\app-debug.apk
-& $adb -s PBFIINYP7LGE4PPV shell am start -n com.buildwithanshul.reeltunes/.MainActivity
+& $adb devices                       # copy the exact serial — wireless shows as adb-<device>-<hash>._adb-tls-connect._tcp
+& $adb -s "<serial>" install -r build\app\outputs\flutter-apk\app-debug.apk
+& $adb -s "<serial>" shell am start -n com.buildwithanshul.reeltunes/.MainActivity
 ```
 - **No build without explicit approval.** The user runs device tests; the agent reads logcat (`adb logcat -d | Select-String "extraction failed|Saved"`).
-- **Device access:** Wireless debugging is the default now. Pair once with `adb pair <ip>:<pair-port> <code>`, then `adb connect <ip>:<connect-port>`; the connect port changes every time Wireless debugging is toggled. `adb devices` shows a `host:port` serial for Wi-Fi and a bare serial for USB.
+- **Device access:** Wireless debugging is the default now. Pair once with `adb pair <ip>:<pair-port> <code>`, then `adb connect <ip>:<connect-port>`; the connect port changes every time Wireless debugging is toggled, and mDNS pairing exposes a serial like `adb-PBFIINYP7LGE4PPV-Sgk2he._adb-tls-connect._tcp`. USB shows the bare `PBFIINYP7LGE4PPV`.
 - Release plan `--release --split-per-abi` (~40 MB arm64) untested; `flutter build appbundle` never run.
 
 ## Bugs & Gotchas (hit & fixed — empirical)
@@ -203,6 +212,7 @@ E:\Projects\ReelTune\
 │  ├─ models.dart · extractor.dart · engine.dart · library_sync.dart · folder_access.dart
 │  ├─ entitlements.dart                       # trial / free caps / Pro (single source of truth)
 │  ├─ billing.dart                            # RevenueCat: configure, offerings, purchase, restore
+│  ├─ promo.dart · redeem_sheet.dart · code_admin.dart   # codes: registry, redeem sheet, in-app dashboard
 │  ├─ extraction_errors.dart · top_toast.dart · settings_screen.dart · emoji.dart · error_report.dart
 ├─ docs/free-vs-pro.md · docs/ads.md · docs/promo-codes.md
 ├─ tools/repack_engine.py                    # reproducible GPL strip of libpython.zip.so

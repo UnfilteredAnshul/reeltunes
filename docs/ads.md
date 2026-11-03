@@ -35,6 +35,37 @@ AdMob also gives you the pieces this plan needs: **server-side verification
 (SSV)** for rewarded coins, **UMP** consent, per-country **eCPM floors**, and
 `apps.txt` verification. Nothing else does all four for free.
 
+### Meta Audience Network in 2026 — a bidder, not a network
+
+FAN is still alive and shipping (SDK 6.22.0, July 2026), but three facts decide
+how it fits ReelTunes:
+
+1. **Bidding only since 2021.** There is no "integrate FAN directly and get a
+   waterfall" path on Android anymore. It only works as an **ad source inside a
+   mediation layer** — for us, AdMob mediation.
+2. **It cannot be set up before launch.** Onboarding needs a **live Play Store
+   link** (an Early Access listing does not qualify), plus Meta Business Suite,
+   a finance admin, 2FA, a payout account with a tax ID, app **ownership
+   verification**, and **up to 72 h** of app review. Ads only serve after payout
+   info is added — so this is post-launch work by definition.
+3. **No AdMob-style SSV for rewarded.** FAN rewarded has no server-to-server
+   reward callback we can verify on the Worker, so it must never become the coin
+   source. Coins stay on **AdMob rewarded + SSV**; FAN can only *bid* on that
+   same rewarded unit.
+
+**Integration when we do it:** add Meta Audience Network as an AdMob bidding
+source (`com.google.ads.mediation:facebook:6.22.0.1`, FAN SDK 6.22.0, min API
+24), create one property + placement in Monetization Manager, list Meta in
+`app-ads.txt`, and add Meta to the UMP / US-state privacy disclosures. Formats
+map 1:1 to what we already ship (banner, interstitial, rewarded).
+
+**Verdict:** worth testing **after** AdMob has a measured baseline, as a second
+bidder on the banner and interstitial units — it raises competition for Indian
+inventory without a UI change. It is not a replacement for AdMob, and it can
+never replace it for coins. Payouts are monthly (~21st) with a **$25**
+international minimum via PayPal/local bank (**$100** by wire), so early revenue
+will sit in the account for a while.
+
 ### What a realistic Indian eCPM looks like (₹ per 1,000 impressions)
 
 | Format | India | US / EU |

@@ -181,6 +181,9 @@ class LibrarySync {
       // Survives uninstall with the folder, so a reinstall cannot restart the
       // 7-day trial (docs/free-vs-pro.md §7).
       'trialStartMs': Entitlements.I.trialStartedAt?.millisecondsSinceEpoch,
+      // Pro time from a redeemed code travels with the folder as well, so a
+      // reinstall restores what the user already earned.
+      'grant': Entitlements.I.codeGrantMirror,
       'folders': [for (final f in store.folders) f.toMap()],
       'tracks': [
         for (final t in store.tracks)
@@ -216,6 +219,14 @@ class LibrarySync {
     // The folder remembers when the trial started; adopt it before importing
     // anything so caps are applied with the right plan.
     await Entitlements.I.adoptTrialStart((data['trialStartMs'] as num?)?.toInt());
+    final grant = data['grant'];
+    if (grant is Map) {
+      await Entitlements.I.adoptCodeGrant(
+        untilMs: (grant['untilMs'] as num?)?.toInt(),
+        lifetime: grant['lifetime'] == true,
+        code: grant['code']?.toString(),
+      );
+    }
     var blocked = 0;
 
     for (final m in (data['folders'] as List? ?? const [])) {

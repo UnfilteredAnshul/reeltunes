@@ -7,9 +7,12 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'billing.dart';
+import 'code_admin.dart';
 import 'entitlements.dart';
 import 'library_sync.dart';
 import 'models.dart';
+import 'promo.dart';
+import 'redeem_sheet.dart';
 import 'sheets.dart';
 import 'top_toast.dart';
 
@@ -147,6 +150,31 @@ class SettingsScreen extends StatelessWidget {
                             ),
                       onTap: () => showPaywallSheet(context),
                     ),
+                    ListTile(
+                      leading: const Icon(Icons.confirmation_number_outlined),
+                      title: const Text('Redeem a code'),
+                      subtitle: const Text(
+                          'Adds Pro time · never changes the Play price'),
+                      onTap: () async {
+                        final result = await showRedeemSheet(context);
+                        if (result == null || !context.mounted) return;
+                        showTopToast(context, result.message);
+                      },
+                    ),
+                    if (kDebugMode || PromoEngine.I.adminUnlocked)
+                      ListTile(
+                        leading:
+                            const Icon(Icons.dashboard_customize_outlined),
+                        title: const Text('Code dashboard'),
+                        subtitle: const Text(
+                            'Create, revoke and inspect codes on this device'),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) => const CodeDashboardScreen()),
+                        ),
+                      ),
                     // Only meaningful once the store is live and nothing is
                     // active: reinstalls and new phones land here.
                     if (!e.isPro && Billing.I.configured)
