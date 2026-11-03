@@ -1340,13 +1340,21 @@ class _PaywallSheetState extends State<_PaywallSheet> {
               Text(
                 Billing.I.hasIntroTrial
                     ? '7 days free, then the price above. Cancel anytime in '
-                        'Google Play — you keep Pro until the period ends.\n'
-                        'Prices shown by Google Play for your country.'
+                        'Google Play — you keep Pro until the period ends.'
                     : 'Billed through Google Play. Cancel anytime in Google '
-                        'Play — you keep Pro until the period ends.\n'
-                        'Prices shown by Google Play for your country.',
+                        'Play — you keep Pro until the period ends.',
                 textAlign: TextAlign.center,
                 style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                Billing.I.planView('monthly') != null
+                    ? 'Prices shown by Google Play for your country.'
+                    // Offline or not configured: never pretend a hard-coded
+                    // number is the price Play will charge.
+                    : 'Exact price is shown by Google Play at checkout.',
+                textAlign: TextAlign.center,
+                style: text.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
               ),
             ],
             const SizedBox(height: 14),
