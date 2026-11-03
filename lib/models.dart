@@ -4,7 +4,6 @@
 
 import 'dart:convert';
 import 'dart:io';
-import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -18,6 +17,19 @@ enum ViewMode { list, grid }
 enum RtLoop { smart, customRange, infinite }
 
 enum SortBy { manual, name, dateAdded }
+
+/// Date-added filter for the library. Session-only on purpose: a fresh
+/// launch always shows the whole library.
+enum DateFilter { any, today, week, month }
+
+extension DateFilterLabel on DateFilter {
+  String get label => switch (this) {
+        DateFilter.any => 'Any time',
+        DateFilter.today => 'Today',
+        DateFilter.week => 'Last 7 days',
+        DateFilter.month => 'Last 30 days',
+      };
+}
 
 class Folder {
   final String id;
@@ -34,7 +46,11 @@ class Track {
   final String id;
   String title;
   final String source; // 'import' for now; tiktok/ig/yts once extraction lands
-  final String path; // absolute path of the saved audio file
+  String path; // absolute path or content:// URI of the audio file
+  /// File name inside the audios folder. It is how the folder and the library
+  /// are matched, and it is what the metadata mirror stores (URIs do not
+  /// survive a reinstall, names do).
+  String fileName;
   int durationMs; // filled after the first successful load
   List<String> folderIds;
   int addedAtMs; // epoch ms of import; 0 for tracks added before this field
@@ -44,6 +60,7 @@ class Track {
     required this.title,
     required this.source,
     required this.path,
+    this.fileName = '',
     this.durationMs = 0,
     int? addedAtMs,
     List<String>? folderIds,
@@ -55,6 +72,7 @@ class Track {
         'title': title,
         'source': source,
         'path': path,
+        'fileName': fileName,
         'durationMs': durationMs,
         'addedAtMs': addedAtMs,
         'folderIds': folderIds,
@@ -65,6 +83,7 @@ class Track {
         title: m['title'],
         source: m['source'] ?? 'import',
         path: m['path'],
+        fileName: m['fileName'] ?? '',
         durationMs: (m['durationMs'] ?? 0) as int,
         addedAtMs: (m['addedAtMs'] ?? 0) as int,
         folderIds: List<String>.from(m['folderIds'] ?? const []),
@@ -86,6 +105,34 @@ class AppStore extends ChangeNotifier {
   String saveFolder = ''; // absolute path; empty until first-run setup
   bool firstRunDone = false;
 
+  /// The audios folder as a SAF tree. Android denies raw paths in Download, so
+  /// this is the real storage location; [saveFolder] is legacy display state.
+  bool audiosLinked = false;
+  String audiosUri = '';
+  String audiosName = '';
+  bool audiosWritable = false;
+
+  /// Set by LibrarySync: mirrors playlists into the audios folder after saves.
+  Future<void> Function()? onLibrarySaved;
+
+  /// File names the user took out of the library with "Remove from ReelTunes".
+  /// The file stays in the audios folder, so without this list the folder scan
+  /// would quietly put it back.
+  List<String> hiddenFileNames = [];
+
+  void setAudiosFolder({
+    required bool linked,
+    String uri = '',
+    String name = '',
+    bool writable = false,
+  }) {
+    audiosLinked = linked;
+    audiosUri = uri;
+    audiosName = name;
+    audiosWritable = writable;
+    notifyListeners();
+  }
+
   // Advanced looping: user's custom loop-count range (persisted; 3-5 default)
   int rangeMin = 3;
   int rangeMax = 5;
@@ -97,6 +144,25 @@ class AppStore extends ChangeNotifier {
   bool sortAsc = true; // ascending when sortBy != manual
 
   String? selectedFolderId; // null = All audios
+
+  // Library search + date filter (session state — deliberately not persisted,
+  // so relaunching always shows everything).
+  String searchQuery = '';
+  DateFilter dateFilter = DateFilter.any;
+
+  /// Whether the playlist list/grid under the chip strip is open. Session
+  /// state: collapsing is a quick "get it out of the way", not a preference.
+  bool playlistsExpanded = true;
+
+  /// The "how it works" bar on the home screen. Hidden for good once the
+  /// user opens the guide or closes the bar.
+  bool guideBannerDismissed = false;
+
+  /// Rolling history of custom-range loop counts the user actually let play
+  /// out. Smart looping samples this, so someone who keeps choosing 6-8 stops
+  /// being served 3-5. Capped to recent behavior, not all-time.
+  List<int> loopHistory = [];
+  static const int maxLoopHistory = 12;
 
   bool get fullPro => true; // full pro for now; restrictions come later
 
@@ -122,6 +188,12 @@ class AppStore extends ChangeNotifier {
     playDuringCalls = _prefs.getBool('playDuringCalls') ?? false;
     sortBy = SortBy.values[_prefs.getInt('sortBy') ?? 0];
     sortAsc = _prefs.getBool('sortAsc') ?? true;
+    guideBannerDismissed = _prefs.getBool('guideBannerDismissed') ?? false;
+    hiddenFileNames = _prefs.getStringList('hiddenFileNames') ?? const [];
+    loopHistory = (_prefs.getStringList('loopHistory') ?? const <String>[])
+        .map(int.tryParse)
+        .whereType<int>()
+        .toList();
 
     if (_libFile!.existsSync()) {
       try {
@@ -156,9 +228,20 @@ class AppStore extends ChangeNotifier {
     _prefs.setBool('playDuringCalls', playDuringCalls);
     _prefs.setInt('sortBy', sortBy.index);
     _prefs.setBool('sortAsc', sortAsc);
+    _prefs.setBool('guideBannerDismissed', guideBannerDismissed);
+    _prefs.setStringList('hiddenFileNames', hiddenFileNames);
+    _prefs.setStringList(
+        'loopHistory', [for (final n in loopHistory) '$n']);
     try {
       await _libFile!.writeAsString(jsonEncode(data), flush: true);
     } catch (_) {/* preview: ignore write errors */}
+    // Mirror into the audios folder so a reinstall can restore playlists.
+    final hook = onLibrarySaved;
+    if (hook != null) {
+      try {
+        await hook();
+      } catch (_) {/* the folder may be unlinked or read-only */}
+    }
   }
 
   void _persist() {
@@ -199,8 +282,24 @@ class AppStore extends ChangeNotifier {
   }
 
   void addTrack(Track t) {
+    // Adding something explicitly always wins over an earlier "remove from
+    // ReelTunes", otherwise the folder scan would keep suppressing it.
+    if (t.fileName.isNotEmpty) {
+      hiddenFileNames.removeWhere((n) => n == t.fileName);
+    }
     tracks.add(t);
     _persist();
+  }
+
+  /// "Remove from ReelTunes" (file stays in the audios folder). Remembering the
+  /// file name stops the next folder scan from re-adding it.
+  void removeTrackKeepFile(String id) {
+    final t = trackById(id);
+    if (t == null) return;
+    if (t.fileName.isNotEmpty && !hiddenFileNames.contains(t.fileName)) {
+      hiddenFileNames.add(t.fileName);
+    }
+    removeTrack(id);
   }
 
   void updateTrackDuration(String id, int ms) {
@@ -248,7 +347,33 @@ class AppStore extends ChangeNotifier {
       _mutateSetting(() => rangeMin = v.clamp(1, rangeMax));
   void setRangeMax(int v) =>
       _mutateSetting(() => rangeMax = v.clamp(rangeMin, 999));
+  /// Sets both ends in one go (a min above the old max must not get clamped
+  /// away before the new max lands).
+  void setRange(int min, int max) => _mutateSetting(() {
+        rangeMin = min.clamp(1, 999);
+        rangeMax = max.clamp(1, 999);
+        if (rangeMax < rangeMin) rangeMax = rangeMin;
+      });
   String get rangeLabel => '$rangeMin-${rangeMax}x';
+
+  /// Remembers a loop session the user actually listened through. Only full
+  /// custom-range completions are recorded — a skip is not a preference.
+  void recordLoopCount(int count) {
+    if (count < 1 || count > 99) return;
+    loopHistory.add(count);
+    while (loopHistory.length > maxLoopHistory) {
+      loopHistory.removeAt(0);
+    }
+    _prefs.setStringList(
+        'loopHistory', [for (final n in loopHistory) '$n']);
+  }
+
+  /// One of the user's recent custom-range counts, or null when Smart has no
+  /// signal yet (it then falls back to the 3-5 style range).
+  int? learnedLoopCount() {
+    if (loopHistory.isEmpty) return null;
+    return loopHistory[Random().nextInt(loopHistory.length)].clamp(1, 99);
+  }
 
   // ---- physical folders (Downloads/ReelTune Audios/<category>) ----
   /// Sub-directory on disk for a library folder: root/category-name.
@@ -308,23 +433,80 @@ class AppStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setSearchQuery(String q) {
+    if (searchQuery == q) return;
+    searchQuery = q;
+    notifyListeners();
+  }
+
+  void setDateFilter(DateFilter f) {
+    if (dateFilter == f) return;
+    dateFilter = f;
+    notifyListeners();
+  }
+
+  void togglePlaylists() {
+    playlistsExpanded = !playlistsExpanded;
+    notifyListeners();
+  }
+
+  void dismissGuideBanner() {
+    if (guideBannerDismissed) return;
+    guideBannerDismissed = true;
+    _persist();
+  }
+
+  // ---- grid rearrange mode (menu-invoked; never persisted) ----
+  bool arrangingFolders = false;
+  bool arrangingTracks = false;
+  bool get anyArranging => arrangingFolders || arrangingTracks;
+  void startArranging({required bool folders}) {
+    arrangingFolders = folders;
+    arrangingTracks = !folders;
+    notifyListeners();
+  }
+
+  void stopArranging() {
+    arrangingFolders = false;
+    arrangingTracks = false;
+    notifyListeners();
+  }
+
   void refresh() {
     notifyListeners();
   }
 
-  Iterable<Track> get visibleTracks => selectedFolderId == null
-      ? tracks
-      : tracks.where((t) => t.folderIds.contains(selectedFolderId));
+  /// Tracks matching the current folder + name search + date filter, in
+  /// store order. One place so the count, list, grid and play queue agree.
+  List<Track> _baseVisible() {
+    final sel = selectedFolderId;
+    final q = searchQuery.trim().toLowerCase();
+    final now = DateTime.now();
+    final sinceMs = switch (dateFilter) {
+      DateFilter.any => 0,
+      DateFilter.today =>
+        DateTime(now.year, now.month, now.day).millisecondsSinceEpoch,
+      DateFilter.week =>
+        now.subtract(const Duration(days: 7)).millisecondsSinceEpoch,
+      DateFilter.month =>
+        now.subtract(const Duration(days: 30)).millisecondsSinceEpoch,
+    };
+    return tracks.where((t) {
+      if (sel != null && !t.folderIds.contains(sel)) return false;
+      if (q.isNotEmpty && !t.title.toLowerCase().contains(q)) return false;
+      if (sinceMs > 0 && (t.addedAtMs <= 0 || t.addedAtMs < sinceMs)) {
+        return false;
+      }
+      return true;
+    }).toList();
+  }
+
+  Iterable<Track> get visibleTracks => _baseVisible();
 
   /// visibleTracks in display order: store order when sortBy==manual,
   /// otherwise name/date added with the asc/desc preference.
   List<Track> get visibleTracksSorted {
-    final sel = selectedFolderId;
-    final list = (sel == null
-            ? tracks.toList()
-            : tracks.where((t) => t.folderIds.contains(sel)).toList())
-        .whereType<Track>()
-        .toList();
+    final list = _baseVisible();
     final order = {
       for (var i = 0; i < list.length; i++) list[i].id: i,
     };
@@ -344,25 +526,20 @@ class AppStore extends ChangeNotifier {
     return list;
   }
 
-  /// Drag-reorder inside the currently visible slice (works with filtering).
+  /// Drag-reorder inside the currently visible slice (folder + search +
+  /// date filter). Only the matching tracks are resequenced; everything else
+  /// keeps its place in the store.
   void reorderVisibleTracks(int oldIndex, int newIndex) {
-    final sel = selectedFolderId;
-    final visible = (sel == null
-            ? tracks.toList()
-            : tracks.where((t) => t.folderIds.contains(sel)).toList())
-        .whereType<Track>()
-        .toList();
+    final visible = _baseVisible();
     if (oldIndex < 0 || oldIndex >= visible.length) return;
     newIndex =
         (newIndex > oldIndex ? newIndex - 1 : newIndex).clamp(0, visible.length);
     final moved = visible.removeAt(oldIndex);
     visible.insert(newIndex, moved);
+    final ids = {for (final t in visible) t.id};
     var vi = 0;
     for (var i = 0; i < tracks.length; i++) {
-      final keep = sel == null
-          ? true
-          : tracks[i].folderIds.contains(sel);
-      if (keep) tracks[i] = visible[vi++];
+      if (ids.contains(tracks[i].id)) tracks[i] = visible[vi++];
     }
     // A drag = the user wants manual control again.
     sortBy = SortBy.manual;

@@ -1,165 +1,208 @@
 # Project: ReelTunes
 
 ## Project Identity
-- **Name:** ReelTunes (display name; internal package id stays `com.reeltune.app.reel_tune` / Dart package `reel_tune`)
-- **What it is:** Android Flutter music player for short-form video audio. Paste a TikTok / Instagram Reel / YouTube Shorts link → the app extracts the audio **on-device** with a bundled yt-dlp engine → plays it offline through an advanced looping player. Also imports real device media: **audio files AND whole folders of videos — videos play their audio track with zero copy/extract**.
-- **Pitch:** ReelTunes is a fully local, 100% on-device audio library. No cloud, no login, no server, no database. Uninstalling the app deletes everything the app owns. Users organize category folders (Motivation, Edits… — multi-membership, emoji avatars), share links straight from social apps, and listen with per-track random loop counts ("reel-style" repeat) via Smart / Custom-range / ∞-infinite looping and shuffle-on-by-default playback with Spotify-style state indication.
-- **Status (2026-10-30):** Full-pro dev build stable on physical Realme RMX3381 (Android 16 / ColorOS). Playback, background media session, folder UX, grid + list drag-reorder, error toasts, video-folder import all working end-to-end.
+- **Name:** ReelTunes · `applicationId com.buildwithanshul.reeltunes` (permanent — cannot change after the first Play upload) · Dart package `reel_tune` · project folder `E:\Projects\ReelTune`.
+- **What it is:** Android Flutter music player for short-form video audio. Paste a TikTok / Instagram Reel / YouTube Shorts link → audio is extracted **on-device** by a bundled CPython + yt-dlp engine → the file is written into the user's own audios folder and played offline with loop/shuffle controls. Also imports existing phone media through SAF (videos play their own audio, nothing copied).
+- **Pitch:** 100% on-device library. No cloud, no login, no server, no database. The audios folder is the source of truth: drop a song in with a file manager and it appears; uninstall the app and the files plus a portable copy of the playlists stay behind.
+- **Status (2026-11-02):** debug build installed and clean-launching on a Realme RMX3381 (ColorOS, Android 13 / SDK 33). Since the last doc: engine rewritten GPL-free, SAF audios folder added (link once, auto-scan, mirror/restore), combined sort+filter, guide sheet, playlist collapse, repeating idle nudge, top toast, remove-vs-delete flows. Engine runs end-to-end (Python → SSL → yt-dlp); the YouTube 403 from the old bundled yt-dlp is fixed by updating to 2026.10.26 — a successful save still needs user testing.
+- **Production status:** internal debug only. No release signing, no AAB, no ads/billing, no privacy policy yet. See "Production readiness (open)".
 
 ## Tech Stack
-- **Flutter** 3.47.8 (`C:\src\flutter\bin` on PATH), Dart M3, Material 3
-- **Android SDK** 36 at `E:\Android\Sdk`, NDK 28.2.13676358, Java/Gradle via Android Studio `C:\Program Files\Android\Android Studio\jbr`; `minSdk 24`
-- **Deps (pubspec.yaml):** `just_audio` 0.10.6, `just_audio_background` 0.0.1-beta.17 (→ transitively `audio_service` 0.18.19), `audio_session`, `receive_intent`, `reorderable_grid_view` 2.2.8, `ytdlp_flutter` ^0.1.0 (bundles yt-dlp + Python per ABI; **GPLv3 note**), `path_provider`, `shared_preferences`, `url_launcher`, `file_picker` 13.3.0 (**nonstandard fork API**: `FilePicker.pickFiles` returns `List<PlatformFile>` directly; no `multiple` param; `FilePicker.getDirectoryPath()` for folders)
-- **Device:** adb at `E:\Android\Sdk\platform-tools\adb.exe`, serial `PBFIINYP7LGE4PPV`
-- No cloud/auth/Firebase. `AppStore.I.fullPro` = `true` in dev.
+- **Flutter** 3.47.8 (`C:\src\flutter\bin`), Material 3, Dart `^3.9.0`.
+- **Android:** `minSdk 24`, `targetSdk = flutter.targetSdkVersion` (36), SDK 36 at `E:\Android\Sdk`, NDK 28.2.13676358, JDK from Android Studio.
+- **Deps (pubspec.yaml):** `just_audio` ^0.10, `just_audio_background` beta.17 (→ `audio_service` 0.18.19), `audio_session`, `receive_intent`, `reorderable_grid_view` 2.2.8, `path_provider`, `shared_preferences`, `url_launcher`, `file_picker` 13.x (**nonstandard fork**: `pickFiles` returns `List<PlatformFile>`, `getDirectoryPath()`), `cupertino_icons`.
+- **Removed:** `ytdlp_flutter` / `youtubedl-android` (GPL-3.0, ffmpeg payload, runtime yt-dlp updates). Nothing GPL ships now except `libcrypt` (LGPL-2.1, unmodified, separate `.so`).
+- **Device:** adb `E:\Android\Sdk\platform-tools\adb.exe`, serial `PBFIINYP7LGE4PPV`, pattern lock — user unlocks and tests manually; `svc power stayon true` set.
+- **No storage permissions at all.** All media and folder access goes through SAF (`content://` URIs).
 
 ## Design System
-- Accent `Color(0xFF0A5CD6)` via `ColorScheme.fromSeed`, Material 3, light/dark/system.
-- Bottom sheets everywhere (`showDragHandle: true`) — SEE BUG #2 (ColorOS dialogs = invisible scrim).
-- Splash: **coin loader only** (no logo image; `assets/logo.png` still registered in pubspec for launcher use).
-- App display name **ReelTunes** everywhere visible (launcher label, app bar, splash tagline, "ReelTunes Pro", notification channel 'ReelTunes playback'). Physical folder `ReelTune Audios` deliberately NOT renamed (would orphan on-device data).
-- Active-state indication like Spotify: shuffle/repeat icon buttons color `scheme.primary` when active; repeat shows `Icons.repeat_on` while ∞ looping.
+- Accent `Color(0xFF0A5CD6)` via `ColorScheme.fromSeed`, light/dark/system.
+- **Bottom sheets only** (ColorOS renders dialog scrims invisible). No `showDialog` in the app — the old first-run `AlertDialog` is now `FirstRunSheet`.
+- Splash = coin loader + "warming up your library…" only, minimum 1.4 s.
+- Display name **ReelTunes**; physical folder `ReelTune Audios` (deliberately different spelling, existing data).
+- **One sort+filter sheet:** left half SORT (Manual / Name / Date added + ascending), right half DATE ADDED (Any time / Today / Last 7 days / Last 30 days). Both apply live; sliders (`Icons.tune`) turn primary when something is active.
+- **Playlists wording everywhere** (model is still `Folder`): chip strip, `Playlists (N)` header with `AnimatedRotation` chevron. **The playlist list/grid toggle only exists while the section is expanded** — a collapsed section has nothing to lay out.
+- **Guide:** dismissible banner "First time here? Here is how it works." above the chip strip → opens a 7-step bottom sheet (also reachable at the top of Settings). Banner stays until dismissed (X or opening the guide).
+- **Idle nudge:** after 7 s of stillness the import FAB expands into the "Import audio" pill for ~1.8 s and **repeats forever** while idle; resets on any touch/scroll/search; paused when audio is playing or the page isn't current. The pill occupies a fixed-width right-aligned slot, so the **"Add reel" button never moves**.
+- **Top toast** (`lib/top_toast.dart`): slides in under the status bar, auto-dismisses after 2.6 s, tap to dismiss, never blocks input. Replaces bottom snackbars for failures.
+- Active-state accents like Spotify: shuffle / repeat / filter icons in `scheme.primary`.
 
 ## Database Schema
-No SQL DB. Two stores:
-1. **`library.json`** (app documents dir) — source of truth:
+No SQL. Two local stores + one mirrored file:
+1. **`library.json`** (app documents dir, `app_flutter/library.json`) — fast local source of truth:
    ```json
-   { "tracks": [ { "id","title","source","path","durationMs","addedAtMs","folderIds": ["f…"] } ],
+   { "tracks": [ { "id","title","source","path","fileName","durationMs","addedAtMs","folderIds": ["f…"] } ],
      "folders": [ { "id","name","emoji" } ] }
    ```
-   - `source` values seen: `'TikTok'/'YouTube'/'Instagram'` (extracted), `'import'` (copied file flow), `'file'` (reference-imported audio), `'video'` (reference-imported video).
-   - `folderIds` — multi-membership; empty = "All only". Delete-folder keeps tracks; delete-track removes the file **only if `path` starts with the save root** (reference-imported videos are unlisted, never deleted from disk).
-2. **SharedPreferences keys:** `themeMode`(0), `folderView`(1), `trackView`(0), `saveFolder('')`, `firstRunDone(false)`, `rangeMin(3)`/`rangeMax(5)`, `confirmDelete(true)`, `playDuringCalls(false)`, `sortBy(0 manual|1 name|2 dateAdded)`, `sortAsc(true)`.
+   - `path` is a **`content://` URI** (audios folder or SAF import) — no raw paths since the SAF change.
+   - `fileName` is the bridge between the folder and the library, and the key used by the mirror/restore.
+   - `source`: `'TikTok' | 'YouTube' | 'Instagram' | 'web'` (extracted) · `'file' | 'video'` (imported).
+2. **`.reeltunes-library.json`** inside the audios folder — portable mirror (folders + `{name,title,source,durationMs,addedAtMs,folderIds}`). Written ~700 ms after every library change; read back on the first launch after a reinstall, matched to files by name.
+3. **SharedPreferences:** `themeMode`, `folderView`, `trackView`, `saveFolder` (legacy display string), `firstRunDone`, `rangeMin/rangeMax`, `confirmDelete(true)`, `playDuringCalls`, `sortBy`, `sortAsc`, `guideBannerDismissed`, `playlistsExpanded` (session), `loopHistory` (last 12 custom-range counts), **`hiddenFileNames`** (files removed with "Remove from ReelTunes" — stops a folder scan from re-adding them).
+   - Android-side prefs (`reeltunes_folder`): SAF tree URI + resolved root document id.
+   - Not persisted on purpose: search text, date filter.
 
-## Physical folder layout ("how categories are handled")
-- `library.json` is the index; the FS is an optimization, never truth.
-- Extraction output dir: `directoryForFolder(folderIds.firstOrNull)` → save root, or `<root>/<emojiLetters>_<folderId>/` subfolder (created recursively; falls back to root). Multi-folder tracks: file lives in the FIRST chosen folder's dir; membership of others is JSON-only.
-- Reference imports (`importMediaFiles`/`importMediaFolder`): create Tracks pointing at the **original path** — not copied, not moved, storage cost zero; delete never touches them (root-guard in `deleteTrackWithConfirm`).
-- "All" lists every track; selecting a folder filters `folderIds.contains(selectedId)`; that selection is the **active playlist** shown as `playing from <name>` in the player (default "All").
+## Storage model (SAF audios folder)
+- The user links a folder once (`FolderBridge.link`, `ACTION_OPEN_DOCUMENT_TREE`, read+write persistable grant). If they pick `Download`, the app steps into / creates `ReelTune Audios`.
+- **Why:** Android 13+ denies raw paths in Download/DCIM/Movies even with `READ_MEDIA_*` (verified: `touch /sdcard/Download/...` → permission denied as the app UID). SAF is the only Play-safe route.
+- **Save path:** yt-dlp writes into the app cache → `FolderBridge.save` copies bytes into the folder (optionally a playlist sub-folder). The cache copy is deleted.
+- **Discovery:** `LibrarySync.sync()` runs on launch and on `AppLifecycleState.resumed` — files added by a file manager appear, files deleted outside the app disappear (only entries under the linked tree are considered).
+- **Remove vs delete:** "Remove from ReelTunes" unlists and remembers `fileName`; "Delete audio and file" asks once (checkbox + Settings switch `confirmDelete`) and deletes the document.
+- **Reinstall:** the grant is revoked by Android, so the user links the same folder once → mirror restores playlists/titles/order, scan restores files.
+
+## Engine (extraction)
+- **Payload (all in the APK, no runtime downloads):** CPython 3.12 (PSF-2.0), QuickJS (MIT, used via yt-dlp `--js-runtimes quickjs`), yt-dlp **2026.10.26** zipapp (Unlicense), zlib/OpenSSL/etc. from the CPython distribution. No ffmpeg.
+- **GPL strip:** `tools/repack_engine.py` rebuilds `libpython.zip.so` without readline/history/gdbm and the GPL-linked modules; verified 0 GPL strings. yt-dlp is Unlicense. `libcrypt` (LGPL-2.1) ships unmodified.
+- **Packaging:** `android/app/src/main/jniLibs/<abi>/` holds `libpython.so`, `libpython.zip.so`, `libqjs.so`, `libytdlp.so` for arm64-v8a / armeabi-v7a / x86_64. Requires `extractNativeLibs="true"` + `useLegacyPackaging=true`.
+- **`EngineBridge.kt`:** unpacks the stdlib zip to `files/python-3.12/usr`, materialises the zip's symlink stubs (`libz.so.1` ships as 13 bytes of text) via `Os.symlink`, then runs `libpython.so` with `PYTHONHOME=<usr>`, `LD_LIBRARY_PATH=<usr>/lib`, `SSL_CERT_FILE=<usr>/etc/tls/cert.pem` (without it every request dies with `CERTIFICATE_VERIFY_FAILED`), `TMPDIR=cache`. Streams stdout/stderr, reports progress, supports cancel, errors carry the last stderr line.
+- **Dart side:** `lib/engine.dart` (channel wrapper), `lib/extractor.dart` (naming, cache→folder save, Track creation). **yt-dlp updates only ship through Play releases**, never at runtime.
 
 ## Auth Flow
-None. Free/pro gating contract in `docs/free-vs-pro.md` via `AppStore.I.fullPro` (currently true). Ads/payment not started.
+None. `AppStore.I.fullPro` is hard-coded `true`; free/Pro gating contract in `play-compliance.md` / `docs/free-vs-pro.md`. Ads/Play Billing not started.
 
 ## Routing (screens)
-- **RootScreen (main.dart)** — instant `runApp`; store init + share-intent listening + ≥1.4 s splash (logo REMOVED — coin loader + 'warming up your library…' only); FirstRunDialog (save folder) on first launch only.
-- **LibraryScreen (library.dart)** — AppBar: ➕ New folder, ⚙ Settings (corner Add-via-file button removed). FAB column: **"Import audio"** (opens import choose-sheet) stacked above **"Add reel"**. Body: `_FolderStrip` → folders header + list/grid toggle → reorderable folders (grid via `ReorderableGridView.builder`, list via `SliverReorderableList`) → tracks header + sort + view toggle → reorderable tracks. `MiniBar` persistent when `current != null` (tap re-opens player).
-- **PlayerSheet (sheets.dart)** — `playing from <folder>` small caption above title; title; `from <source>` (**'· audio only' removed**); position slider + mmss; "Advanced Looping" chips: **Smart (auto)** / **Custom range (N-Mx)** (steppers sheet, persisted) / **Loop ∞ (forever)**; transport: shuffle (accent when on, toggles `toggleShuffle`), prev (restart >3 s else previous track, wrap-around), big circular play/pause, next, repeat (∞ accent + `repeat_on` glyph, toggles infinite loop).
-- **MiniBar (library.dart)** — tile: leading art box, title, subtitle "m:ss / total" + engine-driven `playingStream` play/pause button (never stale), 2 px `LinearProgressIndicator` progress line below.
-- **AddReelSheet (sheets.dart)** — URL (`initialUrl` for share intents) + optional title + **folder MULTI-SELECT checkboxes (optional; none = shows in All)** + "New folder" row; "Extract & save audio"; dev-phase raw error toast; polished fallback `_onExtractionFailed` commented but kept.
-- **FolderCreateSheet** — name + emoji strip; **emoji DEFAULTS TO RANDOM from `emojiPalette`** (every creation path funnels here: strip chip, grid card, Manage folders, folder menus).
-- **SettingsScreen** — Appearance, storage, playback switches, ReelTunes Pro card.
-- **Import choose-sheet** — "Import files (audio or video)" → `importMediaFiles()`; "Import a folder of videos" → `importMediaFolder()` (top-level scan, `_isMediaPath` extension filter, original-path Tracks).
+- **RootScreen (main.dart)** — instant `runApp`; store init + ≥1.4 s splash; `LibrarySync.init()` (grant → restore → scan); first-run `FirstRunSheet` (folder picker) when nothing is linked; share-intent listener; lifecycle observer re-scans on resume.
+- **LibraryScreen (library.dart)** — AppBar: search toggle · New playlist · Settings. FAB column: import pill (icon ↔ "Import audio") above "Add reel"; while rearranging, a single "Save order" FAB. Body: rearrange banner → guide bar → chip strip → `Playlists (N)` + collapse (+ list/grid toggle only when expanded) → playlists (grid/list, drag-reorder) → new-playlist row → tracks header (`All audios (N)` / `In "<name>" (N)`, sort+filter, view toggle) → track list/grid → bottom spacer. MiniBar when something plays; tap opens the player without restarting the queue.
+- **PlayerSheet (sheets.dart)** — playing-from caption, title, source, slider, ✨ Smart / Custom range chips, animated transport (shuffle, prev, play/pause, next, repeat ∞).
+- **AddReelSheet** — URL (+`initialUrl` from share), optional name, playlist multi-select, "Extract & save audio", "Or import an audio file instead". Refuses to run when no folder is linked ("Link your audios folder first").
+- **Track long-press menu** — Rearrange (grid) · Rename · Manage playlists · **Remove from ReelTunes** (keeps the file) · **Delete audio and file** (red, confirmed).
+- **Folder/playlist long-press menu** — Rearrange (grid) · Shuffle · Rename · Edit emoji · Delete.
+- **Settings** — Guide card (top) · Appearance · Storage (audios folder, re-scan, uninstall explanation) · Playback (confirm before delete, keep playing during calls) · Support (mailto bug report) · Account.
+- **Sort & filter sheet**, **Guide sheet**, **Folder create sheet**, **Delete confirm sheet** (with "Don't ask again").
 
 ## Components / Lib (per file)
 ### lib/models.dart
-- `Track {id,title,source,path,durationMs,addedAtMs,folderIds}` + JSON; `Folder {id,name,emoji}`.
-- Enums: `AppThemeMode{system,light,dark}`, `ViewMode{list,grid}`, **`RtLoop{smart,customRange,infinite}`**, `SortBy{manual,name,dateAdded}`.
-- `AppStore.I` (ChangeNotifier): `tracks`, `folders`, prefs above, `selectedFolderId`. Queries: `visibleTracks`, `visibleTracksSorted` (ties by store order — Dart sort unstable), `folderById`. Mutations: `addFolder/deleteFolder/renameTrack/setTrackFolders/updateTrackDuration/addTrack/removeTrack`, view/reorder/sort setters, `fullPro=true`.
-- `reorderVisibleTracks(o,n)` — writes drag order back, switches sort to manual; `reorderFolders(o,n)`.
-- `directoryForFolder(id?)`, `saveFolderWithRoot()`, `randomLoopCount([min,max])`, `mmss(ms)`.
-
-### lib/player.dart — `RtPlayer.I` (ChangeNotifier)
-- **Boot order law:** `JustAudioBackground.init()` MUST complete before any `AudioPlayer` exists. `main()` calls `runApp` then `RtPlayer.I.ensureBackgroundService()`; `RtPlayer._boot()` awaits it, then creates `AudioPlayer(handleInterruptions: false)`; all ops go through `_whenReady()`.
-- Queue = `ConcatenatingAudioSource(children: AudioSource.file(path, tag: MediaItem(id,title,artist: source,duration)))`; `initialIndex = queueIndex`.
-- `play(track, {context, playingFrom})` — Fisher–Yates fresh-epoch-salt shuffle (`Random(now ^ 0x5f4d9e17)`), tapped track pinned front; sets `playingFrom` (explicit param, else from `selectedFolderId`). NOTE: PlayerSheet `startPlayback:false` mode exists — for folder-shuffle where the queue was already built (re-issuing play() with empty context would DESTROY the queue).
-- `_onState`: on `completed` → `_loopsDone++`; `< _targetLoops` OR `loop == RtLoop.infinite` → seek(0)+play; else `skipNext()`.
-- `_loopsTarget()`: range store.min..max; Smart boosts `<30 s` clips (max+1).
-- **`skipNext()` — gapless:** `_ap.seek(Duration.zero, index: (queueIndex+1)%len)` inside the loaded queue (no `setAudioSource` reload); currentIndexStream listener syncs `queueIndex/current` + redraws loop count. Fallback reload path on error. `skipPrev()` — restart >3 s else seek-index to previous (wrap).
-- `_loadFailures` guard: failed loads skip until queue exhausted, then STOP (was the 2 s crash loop).
-- `playingStream` getter (engine-authored truth) — powers MiniBar glyph.
-- Interruptions via `audio_session` (`playDuringCalls` respected); `becomingNoisy` → pause; `removeIfCurrent` graceful stop.
-- `_silentFire()` → notifyListeners (UI in both screens uses `ListenableBuilder(RtPlayer.I)`).
-
-### lib/extractor.dart — `Extractor.extractAndAdd(store,url,{title,folderIds,onStatus})` — Ytdlp.init/update, getVideoInfo naming (sanitize → platform+time fallback), `Ytdlp.downloadAudio` into `directoryForFolder(folderIds.firstOrNull)`, Track with `addedAtMs=now`.
-
+- `Track {id,title,source,path,fileName,durationMs,folderIds,addedAtMs}` + JSON; `Folder {id,name,emoji}`.
+- Enums: `AppThemeMode`, `ViewMode`, `RtLoop{smart,customRange,infinite}`, `SortBy`, `DateFilter`.
+- `AppStore.I`: tracks/folders, prefs, `selectedFolderId`, session search/date filter, `playlistsExpanded`, `guideBannerDismissed`, `hiddenFileNames`, audios-folder state (`audiosLinked/audiosUri/audiosName/audiosWritable`), `onLibrarySaved` hook (mirror), loop learning (`loopHistory`, `recordLoopCount`, `learnedLoopCount`), grid rearrange state, `_baseVisible()` / `visibleTracksSorted`, `reorderVisibleTracks`, `addTrack` (un-hides a name), `removeTrackKeepFile`, `save()` (local JSON + mirror).
+### lib/folder_access.dart
+- Thin Dart wrapper for the `com.buildwithanshul.reeltunes/folder` channel: `state`, `link`, `unlink`, `scan`, `save`, `readText`, `writeText`, `delete`; models `LinkedFolder`, `FolderFile`.
+### lib/library_sync.dart
+- `init` (grant → restore → scan), `link`, `unlink`, `sync` (add new files, update URIs, drop vanished files, map sub-folders to playlists), `mirror` (debounced portable snapshot), `restoreIfEmpty`.
+### lib/player.dart — `RtPlayer.I`
+- Boot law: `JustAudioBackground.init()` before any `AudioPlayer`; all ops through `_whenReady()`.
+- `_sourceFor`: `path.contains('://')` → `AudioSource.uri` (everything today), else `AudioSource.file`.
+- Looping: every track armed `LoopMode.one`; `positionStream` wrap counts passes; final pass flips to `LoopMode.off`; `_targetLoops` random in `rangeMin..rangeMax` (Smart samples `loopHistory`, +1 under 30 s); queue end → seek(0) + play.
+- `unawaited(_ap.play())` everywhere (the future completes when playback stops).
+- Gapless `skipNext/skipPrev`, `_loadFailures` guard, engine-stream listeners for the glyphs, interruptions via `audio_session`, `removeIfCurrent`.
+### lib/extractor.dart
+- `extractAndAdd(store,url,{title,folderIds,onStatus})`: `Engine.getVideoInfo` → sanitised name → yt-dlp into the cache → `FolderAccess.save` into the linked folder (playlist sub-folder when chosen) → Track with `fileName`, URI path, duration.
+### lib/engine.dart
+- Method-channel wrapper for `getVideoInfo`, `downloadAudio` (progress + cancel), `cancel`.
+### lib/extraction_errors.dart
+- Maps yt-dlp text to one plain sentence (login/private, 403, 429, gone, bad link, site changed, network, disk, permission). Used for logs; the UI shows a generic toast.
+### lib/top_toast.dart
+- Overlay-based top toast (`showTopToast`), single instance, slide+fade, tap to dismiss.
 ### lib/library.dart
-- `LibraryScreen`, `_FolderStrip`, `(_ViewToggle, _FoldersGrid|_FoldersList, _TracksView)` — drag-reorder in BOTH grid & list for folders & tracks.
-- `_trackMenu` (Rename / Manage folders / red Delete) → `showFolderPick` multi-select (contains a **"➕ New folder" row** stacked create-sheet), `deleteTrackWithConfirm` — 'Don't ask again' sets `confirmDelete=false`; **root-guarded file delete**; `RtPlayer.removeIfCurrent`.
-- `MiniBar` (engine-stream reactive, progress + timing).
-- `importMediaFiles()` / `importMediaFolder()` / `_trackFromPath` (video → `source:'video'`, no copy) + `_trackId()`.
-- `importAudioFile` ([context]) — legacy copied-import flow (copy into save root → owned → delete-able).
-
+- Home screen, chip strip, playlist header/collapse, sort+filter sheet, guide bar, idle FAB, rearrange modes, track/playlist menus, `removeTrackFromLibrary`, `deleteTrackWithConfirm`, MiniBar, SAF import (`_pickMedia`, `importMediaFiles`, `importMediaFolder`, `importAudioFile`).
 ### lib/sheets.dart
-- `AddReelSheet(+initialUrl)` (+ checkbox folder multi-select), `PlayerSheet(+startPlayback flag)`, `_LoopChip/_RangeStepper/_openRangePicker(+∞ chip)`, `showFolderCreate→FolderCreateSheet` (random default emoji; returns Future), `showInputSheet`, `showFolderPick(+"New folder")`, `showFolderMenu` — **Shuffle** (folder tracks, random head, `play(playingFrom: name)`, opens PlayerSheet with `startPlayback:false`) / Rename / Edit emoji / Delete, `showEmojiPickerSheet`.
-
+- `AddReelSheet`, `PlayerSheet`, range picker (bottom sheet), playlist sheets/menus, guide sheet (`_GuideStep` ×7), emoji picker, `showInputSheet`.
 ### lib/main.dart
-- `main()`: `installErrorReporting()` → `runApp` (instant) → `RtPlayer.I.ensureBackgroundService()` deferred. `installErrorReporting()` — FlutterError.onError + PlatformDispatcher.onError → `reportError`.
-- `reportError` (error_report.dart): `debugPrint '⚠️ …'` + **microtask-deferred snack toast, ONE at a time** (`_toastInFlight` guard; 1 s spacing) — snackbar-in-frame dispatch froze the whole app once.
-- `_SplashScreen` — coin loader only. `CoinLoader` — flipping-circle loader. Share-intent intake (`receive_intent` as `ri`; `extra['android.intent.extra.TEXT']`/`data` → URL → `AddReelSheet(initialUrl)`). `FirstRunDialog` (`Downloads/ReelTune Audios` default).
-
-### Android (critical config)
-- **Manifest (added 09:20 build):** `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MEDIA_PLAYBACK`, `WAKE_LOCK`; `<service android:name="com.ryanheise.audioservice.AudioService" android:foregroundServiceType="mediaPlayback" android:exported="true">` + `MediaBrowserService` intent-filter; `<receiver com.ryanheise.audioservice.MediaButtonReceiver>` + `MEDIA_BUTTON` intent-filter.
-- **`MainActivity : AudioServiceActivity`** (interface for the media session engine).
-- `build.gradle.kts`: minSdk 24, `useLegacyPackaging=true`, `doNotStrip "**/*.zip.so"` (NEVER `excludes` — deletes engine); `gradle.properties`: kotlin.incremental=false. Share-target `SEND` filter + `singleTask` intact.
-
-## Environment Variables
-None. Build env set per-command. GitHub token in Windows Credential Manager — never in files.
+- `main()` (instant `runApp`, error reporting, deferred audio-service warm-up), `RootScreen` (splash, `LibrarySync`, first-run sheet, share intents, lifecycle re-scan), `FirstRunSheet`, `CoinLoader`.
+### lib/settings_screen.dart
+- Guide card, appearance radios, storage block (link folder / re-scan / uninstall copy), playback switches, feedback mailto, Pro card.
+### lib/error_report.dart
+- `rootMessengerKey`, `reportError` (debugPrint + microtask-deferred single toast), `installErrorReporting`.
+### Android
+- **MainActivity : AudioServiceActivity** — engine bridge, folder bridge, SAF media picker channel (`/media`), recents-swipe notification cleanup by class name, back-press flag.
+- **FolderBridge.kt** — SAF tree link/unlink, scan (recursive, depth 4), save (copy from cache), text read/write, delete, open.
+- **EngineBridge.kt** — CPython launcher described above.
+- **Manifest** — INTERNET, FOREGROUND_SERVICE(+MEDIA_PLAYBACK), WAKE_LOCK; AudioService + MediaButtonReceiver; SEND share target; `singleTask`; label ReelTunes; mailto query.
+- **build.gradle.kts** — `applicationId com.buildwithanshul.reeltunes`, `minSdk 24`, `useLegacyPackaging = true`, `doNotStrip "**/*.zip.so"`, release still signed with the debug key.
+- **packages/just_audio_background** — vendored fork of `0.0.1-beta.17` (latest upstream), wired via `dependency_overrides`. Two patches, both marked `ReelTunes patch`: (1) `getRelativeIndex` no longer returns the current index under `repeatMode == one`, so the media session's next/previous skip the queue instead of restarting the track; (2) `onTaskRemoved()` now calls `stop()`, so swiping the app from Recents clears the media notification. `example/` deleted so analysis stays clean. Re-check both when upgrading just_audio.
 
 ## Build & Deploy
 ```powershell
-$env:Path = "C:\src\flutter\bin;$env:Path"; $env:ANDROID_SDK_ROOT = 'E:\Android\Sdk'; $env:JAVA_HOME = 'C:\Program Files\Android\Android Studio\jbr'
 cd E:\Projects\ReelTune
-flutter analyze 2>&1 | Select-String ' error '        # gate: zero errors before build
-flutter build apk --debug 2>&1 | Select-String 'Built |BUILD FAILED|error:'
-E:\Android\Sdk\platform-tools\adb.exe install -r build\app\outputs\flutter-apk\app-debug.apk  # ONLY after a fresh 'Built' line
+flutter analyze                      # gate: zero errors (12 pre-existing infos/warnings)
+flutter build apk --debug            # ~133 MB, 3 ABIs
+$adb = "E:\Android\Sdk\platform-tools\adb.exe"
+& $adb -s PBFIINYP7LGE4PPV install -r build\app\outputs\flutter-apk\app-debug.apk
+& $adb -s PBFIINYP7LGE4PPV shell am start -n com.buildwithanshul.reeltunes/.MainActivity
 ```
-Debug APK ~246 MB (4 ABIs × engine). Release plan: `--release --split-per-abi` (~40 MB arm64) untested.
+- **No build without explicit approval.** The user runs device tests; the agent reads logcat (`adb logcat -d | Select-String "extraction failed|Saved"`).
+- **Device access:** Wireless debugging is the default now. Pair once with `adb pair <ip>:<pair-port> <code>`, then `adb connect <ip>:<connect-port>`; the connect port changes every time Wireless debugging is toggled. `adb devices` shows a `host:port` serial for Wi-Fi and a bare serial for USB.
+- Release plan `--release --split-per-abi` (~40 MB arm64) untested; `flutter build appbundle` never run.
 
 ## Bugs & Gotchas (hit & fixed — empirical)
-1. **Gradle `excludes` deletes the yt-dlp engine** — `excludes += "**/*.zip.so"` stripped Python/yt-dlp from APK (112 MB, `PlatformException(YTDLP_ERROR … failed to initialize)`). Fix: `doNotStrip += "**/*.zip.so"` + `useLegacyPackaging=true`. 112 → 246 MB.
-2. **ColorOS AlertDialog invisible** — `showDialog` renders scrim only on this device. ALL interactive confirmations are `showModalBottomSheet`. (FirstRunDialog survives — route-root standalone.)
-3. **Sheet must handle keyboard** — `isScrollControlled` + inner `Padding(bottom: viewInsets.bottom)`.
-4. **Store snapshotcached in sheets** — wrap in `ListenableBuilder(AppStore.I)`.
-5. **Identical shuffle order across restarts** — seeded `Random(now ^ DartHashSeedRandomSalt)` per call.
-6. **just_audio 0.10.6 lacks public interruption stream** — `audio_session` manual listeners + `handleInterruptions:false`.
-7. **Stale-APK install trap** — failed build leaves old APK; gate install on fresh `Built` timestamp.
-8. **SliverReorderableList** needs explicit `ReorderableDragStartListener` handles; grid drag needs `reorderable_grid_view` 2.2.8 `ReorderableGridView.builder` (NOT default `ReorderableGridView` — that constructor requires `childrenDelegate`; and index semantics = classic `removeAt/insert`).
-9. **Error-reporter wedge (app froze on splash after logo)** — showing a SnackBar *synchronously inside frame dispatch* (`FlutterError.onError`) re-enters the scheduler → `'_FrameCallbackEntry.debugCurrentCallbackStack == null'` assertion → that error itself re-reports → infinite error cascade → permanent wedge at first painted frame. Fix: microtask-deferred toast + one-at-a-time `_toastInFlight` guard + swallow reporter-internal errors.
-10. **just_audio_background silently failed init → `_audioHandler` LateInitializationError → play impossible + 2 s crash** — root cause 1: manifest was missing EVERYTHING the package needs (AudioService service/MediaBrowserService intent-filter, MediaButtonReceiver, FOREGROUND_SERVICE permissions) and MainActivity was plain `FlutterActivity` — platform-side `AudioService.init` fails, Dart `late final _audioHandler` stays unset, EVERY load throws. Root cause 2 (amplifier): `_startCurrent` catch called `skipNext()` → retried → threw → infinite fail/skip storm (logcat: same error every ms, DeadObjectException, process death in ~2 s). Fixes: full manifest wiring (above) + `MainActivity : AudioServiceActivity` + `_loadFailures` counter (skip ≤ queue length, then stop).
-11. **file_picker 13.3.0 fork API** — `pickFiles` returns `List<PlatformFile>` (no FilePickerResult wrapper), no `multiple` param; `getDirectoryPath()` for folders.
-12. **Deleting reference-imported files would nuke user videos** — delete flow now root-guards (`path.startsWith(saveFolderWithRoot())`); external files are only unlisted.
-13. **Playing video audio directly works** — just_audio plays the audio layer of local mp4/mkv/webm; no extraction needed (user's pre-saved video library plays with zero conversion/storage cost).
-14. **No compile errors known** as of 09:20:31 build 2026-10-30; analyzer warnings list is pre-existing dev-phase noise only.
+1. **Gradle `excludes` deletes the engine** — use `doNotStrip` + `useLegacyPackaging=true`.
+2. **ColorOS renders dialog scrims invisible** — every confirmation is a bottom sheet.
+3. **Sheet + keyboard** — `isScrollControlled` + `Padding(bottom: viewInsets.bottom)`.
+4. **Bottom sheets capture the store once** — wrap in `ListenableBuilder(AppStore.I)`.
+5. **Shuffle repeated across restarts** — seed `Random(now ^ salt)` per call.
+6. **`AudioPlayer.play()` future completes when playback stops** — never await it; `unawaited(...)`.
+7. **Stale-APK install trap** — gate installs on a fresh "Built" line.
+8. **Error-reporter wedge** — never show a SnackBar synchronously in a frame; microtask + one-at-a-time.
+9. **Scoped storage blocks folder listing** — raw `ls /sdcard/Download` is denied as the app UID; SAF only.
+10. **App could not write to Download at all** — proven with `run-as` `touch`; this is why the SAF save path exists.
+11. **Engine: `library "libandroid-support.so" not found`** — `PYTHONHOME`/`LD_LIBRARY_PATH` must point at `python-3.12/usr` (+ `/lib`), the zip prefix tree, not its parent.
+12. **Zip stores symlinks as text** — `libz.so.1` arrived as 13 bytes; the unpacker now turns stubs into real `Os.symlink` links (else zlib/binascii fail).
+13. **`CERTIFICATE_VERIFY_FAILED`** — OpenSSL has no trust store on Android; set `SSL_CERT_FILE=<usr>/etc/tls/cert.pem`.
+14. **YouTube `HTTP Error 403`** — bundled yt-dlp was a year old; updated to 2026.10.26 (SHA-256 verified against `SHA2-256SUMS`).
+15. **Instagram "isn't available to everyone"** — audience-restricted reel; requires cookies the app deliberately does not ship. Not fixable client-side.
+16. **Raw `PlatformException(…, null, null)` toasts** — replaced by a generic top toast; details stay in logcat.
+17. **Folder scan re-adds removed tracks** — `hiddenFileNames` suppresses them until the user adds the file again.
+18. **Delete semantics** — "Remove from ReelTunes" unlists; "Delete audio and file" is confirmed (checkbox + Settings switch) and only deletes documents inside the linked folder.
+19. **Two apps after the package rename** — the old `com.reeltune.app.reel_tune` stayed installed; uninstalling it wipes its `library.json` (the 431 old tracks were filename-titled videos still in `Pictures/Creation`; metadata copy kept in `backup/old_library.json`).
+20. **Recents-swipe must clear the media notification** — broadcast `ACTION_NOTIFICATION_DELETE` to the receiver **by class name** (its supertype isn't on the module classpath).
+21. **`adb shell` path mangling on Windows** — quote paths; `pm grant` is blocked on this ColorOS build.
+22. **Stock FAB `isExtended` does not animate** — custom `AnimatedContainer` pill in a fixed-width slot.
+23. **Media-session skip restarted the track** — `just_audio_background` returns the current index from `getRelativeIndex` when `repeatMode == one`, and ReelTunes uses `LoopMode.one` for per-track looping. Patched in the vendored fork; in-app skip was always fine because it calls `seek(zero, index:)` directly.
+24. **Media notification survived Recents swipe** — `onTaskRemoved()` is a no-op upstream. Patched in the fork to `stop()`.
+25. **Mojibake in `library.dart`** — a PowerShell rewrite re-encoded the file (`â€”`, `Â·`, `â€¦`, `â–¶`, `ðŸŽ§`, `âž•`). Fixed by byte-level replacement; scan the repo for `[\u00C2\u00C3\u00C5\u00E2\u00F0\uFFFD]` after any shell-based file edit.
+26. **Do not use `Set-Content -Encoding utf8` on Dart sources** — on this setup it produced the mojibake above. Use `[System.IO.File]::WriteAllText(path, text, UTF8Encoding($false))`.
 
 ## Design Decisions
-- **Bundled ytdlp_flutter over Cobalt/Web:** zero-network extraction; Vercel Cobalt kept ONLY as commented failure fallback.
-- **library.json single source of truth; FS layout = optimization** (All never breaks).
-- **Sheets over dialogs** (ColorOS bug, app-wide pattern).
-- **Dev-phase raw error toasts** on everything (`error_report.dart`), production fallback commented in place.
-- **just_audio_background over raw audio_service** for MediaSession with per-track MediaItem tags; manifest wiring is mandatory (see bug 10).
-- **Folder = filter + optional physical dir; multi-membership by design; empty = All-only.** Selecting a folder = active playlist ("playing from …").
-- **Reference-import for local media:** videos play as-is via just_audio's audio layer; nothing copied; delete guard protects originals (user's explicit storage promise).
-- **Shuffle on by default with toggle; ∞ loop added** as third loop mode (plain infinite repeat) alongside Smart/Custom — Spotify-style accent indication.
-- **Gapless skips:** seek-by-index inside ConcatenatingAudioSource instead of full reload (also keeps media session state transitions clean).
-- **Display name ReelTunes; internal ids unchanged** (renaming folder/on-disk path or package id would migrate/brick existing data).
-- Parked: audio_service lock-screen polish, media widget play/pause verification (needs device retest post-manifest fix), EQ/sleep timer/crossfade, ads/paywall per `docs/free-vs-pro.md`.
+- **On-device bundled engine, no runtime code downloads** — CPython + yt-dlp ride in the APK; updates ship through Play.
+- **GPL-free payload** — no ffmpeg, no youtubedl-android; `tools/repack_engine.py` documents the strip.
+- **SAF folder as source of truth** — saves, discovery and uninstall survival all come from the user's own folder; no broad storage permission.
+- **Portable mirror over a hidden database** — playlists survive reinstall because they live next to the audio.
+- **Playlists wording, `Folder` model** — renaming the model would touch every call site for no user benefit.
+- **Reference imports, never copies** — SAF imports point at the original document URI and are never deleted.
+- **Generic user-facing failures** — one plain sentence; precise reason in logcat.
+- **Platform repeat-one for looping** rather than Dart timers (works backgrounded/screen-off).
+- **Smart learns from Custom** — rolling 12-entry history of completed custom-range sessions.
+- **Infinite loop only via the repeat icon.**
+- **Free/Pro is specified in `docs/free-vs-pro.md`, codes/dashboard in `docs/promo-codes.md`.** 7-day trial = Pro with no ads; day 8 = caps (25 audios / 2 playlists), ads, coin shop. Caps never hide existing tracks.
+- **Vendored dependency over a refactor** — the two `just_audio_background` bugs were fixed in a local fork rather than replacing the media-session layer with a custom `audio_service` handler, to avoid destabilising playback right before release.
+- Parked: custom notification handler, sleep timer/EQ/crossfade, ads + Play Billing, in-app licences screen.
+
+## Production readiness (open)
+- Release signing (debug key today), upload keystore / Play App Signing, AAB.
+- Ads: AdMob + UMP consent for EEA/UK; free-tier limits; ads must be reflected in the privacy policy and Data Safety.
+- Content-rights consent sheet + Settings toggle; link validation (`https` only, host allowlist, length cap).
+- Generic branding in listing/screenshots (no platform names or logos); in-app licences screen (LICENSES/ already shipped in repo).
+- `allowBackup=false` + `dataExtractionRules` (or a deliberate backup story) — audit before release.
+- Privacy policy, Data Safety answers, store listing assets.
+- Free/Pro gating still hard-coded `true`; any paid tier must use Play Billing. Plan + prices are in `docs/free-vs-pro.md`.
+- Extraction IP/ToS exposure and Play's stance on bundled interpreters remain the headline risk.
+- 16 KB page-size support for the bundled `libpython*.so` / `libqjs.so` not verified.
+- Public GPL repo `UnfilteredAnshul/reeltunes-gpl-sources` still undeleted (delete after the GPL-free build is verified on device).
 
 ## File Tree
 ```
 E:\Projects\ReelTune\
-├─ android/
-│  ├─ app/build.gradle.kts                  # minSdk 24; useLegacyPackaging; doNotStrip zip.so
-│  ├─ app/src/main/AndroidManifest.xml      # FOREGROUND_SERVICE(+MEDIA_PLAYBACK), WAKE_LOCK, AudioService svc, MediaButtonReceiver, SEND share-target, singleTask, label ReelTunes
-│  ├─ gradle.properties                     # kotlin.incremental=false
-│  └─ .../kotlin/com/reeltune/app/reel_tune/MainActivity.kt  # AudioServiceActivity()
-├─ assets/logo.png                          # registered; splash no longer shows it
+├─ android/app/build.gradle.kts              # appId com.buildwithanshul.reeltunes, minSdk 24, doNotStrip zip.so, debug signing
+├─ android/app/src/main/AndroidManifest.xml  # no storage permissions; AudioService + receiver; SEND target
+├─ android/app/src/main/jniLibs/<abi>/       # libpython.so, libpython.zip.so, libqjs.so, libytdlp.so (arm64/armv7/x86_64)
+├─ android/app/src/main/kotlin/com/buildwithanshul/reeltunes/
+│  ├─ MainActivity.kt                        # channels, SAF media picker, recents cleanup
+│  ├─ EngineBridge.kt                        # CPython launcher, unpack, symlinks, TLS, progress
+│  └─ FolderBridge.kt                        # SAF audios folder: link/scan/save/text/delete
 ├─ lib/
-│  ├─ main.dart                             # runApp-first, error reporting install, splash(coin only), share intents, FirstRunDialog
-│  ├─ error_report.dart                     # rootMessengerKey + reportError (microtask, 1-at-a-time) + installErrorReporting
-│  ├─ models.dart                           # Track/Folder/enums(+RtLoop.infinite), AppStore, mmss, randomLoopCount
-│  ├─ player.dart                           # RtPlayer.I — boot law, MediaItem queue, ∞/smart/range loops, gapless skip, playingStream
-│  ├─ extractor.dart                        # Extractor.extractAndAdd (ytdlp_flutter)
-│  ├─ library.dart                          # home screen, drag reorder list+grid, track menus, delete guard, MiniBar, import pipeline
-│  ├─ sheets.dart                           # AddReelSheet(checkbox folders), PlayerSheet(∞+indication, startPlayback flag), folder sheets+menu(Shuffle)
-│  ├─ settings_screen.dart                  # theme/storage/playback/ReelTunes Pro
-│  └─ emoji.dart                            # emojiPalette
-├─ pubspec.yaml / pubspec.lock              # deps (just_audio_background beta.17 + audio_service 0.18.19 transitively)
-├─ docs/free-vs-pro.md                      # gating contract; architecture.md (partially outdated)
-├─ pc.md                                    # THIS file
-└─ build/                                   # repo-ignored
+│  ├─ main.dart · library.dart · sheets.dart · player.dart
+│  ├─ models.dart · extractor.dart · engine.dart · library_sync.dart · folder_access.dart
+│  ├─ extraction_errors.dart · top_toast.dart · settings_screen.dart · emoji.dart · error_report.dart
+├─ tools/repack_engine.py                    # reproducible GPL strip of libpython.zip.so
+├─ LICENSES/                                 # PSF-2.0, Apache-2.0, LGPL-2.1, Unlicense, QuickJS-MIT
+├─ THIRD_PARTY_NOTICES.md                    # licence table + yt-dlp version
+├─ backup/old_library.json                   # metadata of the dead old-app library (431 tracks, 4 playlists)
+├─ play-compliance.md                        # Play policy notes
+├─ pc.md                                     # THIS file
+└─ build/                                    # repo-ignored
 ```
 
 ## Skills & MCPs
-- **Skills:** `apple-design`, `savefile` (this file + vault copy), `vault` (session/bug logs), `multi-author-commits` (commit rules below), `opencode` harness; `agent-reach` unused so far.
+- **Skills:** `apple-design`, `savefile` (this file + vault copy), `vault` (session/bug logs), `multi-author-commits` (commit rules), `opencode`; `agent-reach` unused so far.
 - **MCP:** none configured.
 - **Commit rules (owner `UnfilteredAnshul`):** author = Anshul (`anshul091103@gmail.com`); committer = random pick among the 3 identities (Anshul / shreyanotfound404 / buildwithsimran); never push unless explicitly asked; tokens in Credential Manager only.

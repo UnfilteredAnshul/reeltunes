@@ -6,10 +6,12 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'emoji.dart';
+import 'extraction_errors.dart';
 import 'extractor.dart';
 import 'library.dart';
 import 'models.dart';
 import 'player.dart';
+import 'top_toast.dart';
 
 // ---------------------------------------------------------------------------
 // Add reel / extraction intake
@@ -115,7 +117,7 @@ class _AddReelSheetState extends State<AddReelSheet> {
           ),
         ),
         const SizedBox(height: 12),
-        Text('Add to folders (optional — none = shows in All)',
+        Text('Add to playlists (optional. None = shows in All)',
             style: Theme.of(context).textTheme.bodySmall),
         const SizedBox(height: 4),
         ConstrainedBox(
@@ -124,7 +126,7 @@ class _AddReelSheetState extends State<AddReelSheet> {
             if (AppStore.I.folders.isEmpty)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 8),
-                child: Text('No folders yet — create one below.'),
+                child: Text('No playlists yet. Create one below.'),
               ),
             for (final f in AppStore.I.folders)
               CheckboxListTile(
@@ -140,7 +142,7 @@ class _AddReelSheetState extends State<AddReelSheet> {
               dense: true,
               visualDensity: VisualDensity.compact,
               leading: const Icon(Icons.create_new_folder_outlined),
-              title: const Text('New folder'),
+              title: const Text('New playlist'),
               onTap: () => showFolderCreate(context),
             ),
           ]),
@@ -164,6 +166,10 @@ class _AddReelSheetState extends State<AddReelSheet> {
   Future<void> _extract() async {
     final url = urlCtrl.text.trim();
     if (url.isEmpty || working) return;
+    if (!AppStore.I.audiosLinked) {
+      showTopToast(context, 'Link your audios folder first (Settings).');
+      return;
+    }
     setState(() {
       state = _ExtractionState.running;
       status = 'Preparing engine…';
@@ -188,19 +194,14 @@ class _AddReelSheetState extends State<AddReelSheet> {
         ));
       }
     } catch (e) {
+      // Log keeps both the raw engine text and the readable guess so the
+      // failure can be diagnosed without showing it to the user.
       debugPrint('extraction failed: $e');
+      debugPrint('extraction reason: ${friendlyExtractionError(e)}');
       final failedUrl = url;
       if (!mounted) return;
       setState(() => state = _ExtractionState.idle);
-      // DEV PHASE: surface the raw technical error instead of the polished
-      // fallback so we can see what the engine actually says. The wrapper
-      // handoff (_onExtractionFailed) is commented out, not deleted.
-      final msg = e.toString();
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(msg.length > 300 ? '${msg.substring(0, 300)}…' : msg),
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 12),
-      ));
+      showTopToast(context, "Can't download this one. Try another link.");
       // TODO(dev-phase-over): restore the user-facing fallback:
       // Navigator.pop(context);
       // _onExtractionFailed(failedUrl);
@@ -311,7 +312,7 @@ class _FolderCreateSheetState extends State<FolderCreateSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('New folder',
+          Text('New playlist',
               style: Theme.of(context)
                   .textTheme
                   .titleLarge
@@ -426,13 +427,13 @@ Future<void> showFolderPick(BuildContext context, Track t) {
         padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment:
             CrossAxisAlignment.stretch, children: [
-          Text('Choose folders',
+          Text('Choose playlists',
               style: Theme.of(sheetCtx)
                   .textTheme
                   .titleLarge
                   ?.copyWith(fontWeight: FontWeight.w600)),
           const SizedBox(height: 8),
-          Text('"${t.title}" can live in several folders at once.',
+          Text('"${t.title}" can live in several playlists at once.',
               style: Theme.of(sheetCtx).textTheme.bodySmall),
           const SizedBox(height: 8),
           Flexible(
@@ -442,7 +443,7 @@ Future<void> showFolderPick(BuildContext context, Track t) {
                 if (AppStore.I.folders.isEmpty)
                   const Padding(
                     padding: EdgeInsets.symmetric(vertical: 12),
-                    child: Text('No folders yet — create one first.'),
+                    child: Text('No playlists yet. Create one first.'),
                   ),
                 for (final f in AppStore.I.folders)
                   CheckboxListTile(
@@ -455,7 +456,7 @@ Future<void> showFolderPick(BuildContext context, Track t) {
                 // create-folder sheet ON TOP of this one, refresh when done.
                 ListTile(
                   leading: const Icon(Icons.create_new_folder_outlined),
-                  title: const Text('New folder'),
+                  title: const Text('New playlist'),
                   onTap: () async {
                     await showFolderCreate(sheetCtx);
                     setSheetState(() {});
@@ -482,15 +483,26 @@ Future<void> showFolderPick(BuildContext context, Track t) {
 // Folder menu + emoji editor
 // ---------------------------------------------------------------------------
 
-enum _FolderMenuAction { shuffle, rename, editEmoji, delete }
+enum _FolderMenuAction { rearrange, shuffle, rename, editEmoji, delete }
 
 /// Long-press menu on a category: shuffle / rename / edit emoji / delete.
-Future<void> showFolderMenu(BuildContext context, Folder f) async {
+/// [allowRearrange] is grid-only — grid drags are gated behind that explicit
+/// mode so dragging and tapping stop fighting each other.
+Future<void> showFolderMenu(BuildContext context, Folder f,
+    {bool allowRearrange = false}) async {
   final action = await showModalBottomSheet<_FolderMenuAction>(
     context: context,
     showDragHandle: true,
     builder: (sheetCtx) => SafeArea(
       child: Column(mainAxisSize: MainAxisSize.min, children: [
+        if (allowRearrange)
+          ListTile(
+            leading: const Icon(Icons.swap_vert_rounded),
+            title: const Text('Rearrange'),
+            subtitle: const Text('Drag the cards into place, then Save',
+                style: TextStyle(fontSize: 12)),
+            onTap: () => Navigator.pop(sheetCtx, _FolderMenuAction.rearrange),
+          ),
         ListTile(
           leading: const Icon(Icons.shuffle_outlined),
           title: const Text('Shuffle'),
@@ -521,6 +533,8 @@ Future<void> showFolderMenu(BuildContext context, Folder f) async {
   if (action == null || !context.mounted) return;
   final store = AppStore.I;
   switch (action) {
+    case _FolderMenuAction.rearrange:
+      store.startArranging(folders: true);
     case _FolderMenuAction.shuffle:
       final list =
           store.tracks.where((t) => t.folderIds.contains(f.id)).toList();
@@ -551,7 +565,7 @@ Future<void> showFolderMenu(BuildContext context, Folder f) async {
       if (!context.mounted) return;
       final name = await showInputSheet(
         context,
-        title: 'Rename folder',
+        title: 'Rename playlist',
         controller: ctrl,
         confirmLabel: 'Rename',
       );
@@ -572,8 +586,8 @@ Future<void> showFolderMenu(BuildContext context, Folder f) async {
                 style: const TextStyle(fontWeight: FontWeight.w600,
                     fontSize: 18)),
             const SizedBox(height: 8),
-            Text('The audios inside stay in your library — only this '
-                'grouping is removed.',
+            Text('Your audios stay in the library. Only the playlist goes '
+                'away.',
                 style: Theme.of(sheetCtx).textTheme.bodySmall),
             const SizedBox(height: 16),
             Row(children: [
@@ -586,7 +600,7 @@ Future<void> showFolderMenu(BuildContext context, Folder f) async {
                     backgroundColor: Theme.of(sheetCtx).colorScheme.error,
                     foregroundColor: Theme.of(sheetCtx).colorScheme.onError),
                 icon: const Icon(Icons.delete_outline),
-                label: const Text('Delete folder'),
+                label: const Text('Delete playlist'),
                 onPressed: () => Navigator.pop(sheetCtx, true),
               ),
             ]),
@@ -594,6 +608,123 @@ Future<void> showFolderMenu(BuildContext context, Folder f) async {
         ),
       );
       if (ok == true) store.deleteFolder(f.id);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Guide
+// ---------------------------------------------------------------------------
+
+/// Plain-language tour of the app. Opened from Settings and from the bar on
+/// the home screen, so both entry points show the same thing.
+Future<void> showGuideSheet(BuildContext context) {
+  return showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    useSafeArea: true,
+    isScrollControlled: true,
+    builder: (sheetCtx) => ConstrainedBox(
+      constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(sheetCtx).height * 0.82),
+      child: ListView(
+        shrinkWrap: true,
+        padding: const EdgeInsets.fromLTRB(24, 0, 24, 32),
+        children: const [
+          Text('How ReelTunes works',
+              style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+          SizedBox(height: 4),
+          Text('No account needed. Your audios stay on this phone.'),
+          SizedBox(height: 20),
+          _GuideStep(
+            Icons.link_rounded,
+            'Add from a link',
+            'Open the reel, tap Share, then pick ReelTunes. Or copy the link '
+                'and paste it into Add reel.',
+          ),
+          _GuideStep(
+            Icons.folder_open_rounded,
+            'Already have a file?',
+            'Tap the folder button. Pick a song or a video, or a whole folder. '
+                'Videos play as audio. Nothing gets copied.',
+          ),
+          _GuideStep(
+            Icons.playlist_add_rounded,
+            'Make a playlist',
+            'Tap New playlist and give it a name. Tap its chip at the top to '
+                'see only those songs. Tap All to see everything again.',
+          ),
+          _GuideStep(
+            Icons.search_rounded,
+            'Find a song',
+            'Tap the magnifier on the top bar and type part of the name.',
+          ),
+          _GuideStep(
+            Icons.tune_rounded,
+            'Sort and filter',
+            'Tap the sliders button. Sort on the left, date filter on the '
+                'right. You can use one or both.',
+          ),
+          _GuideStep(
+            Icons.play_circle_outline_rounded,
+            'Play',
+            'Tap a song to start. Tap the bar at the bottom for the full '
+                'player. Press and hold a song to rename, move, remove or '
+                'delete it.',
+          ),
+          _GuideStep(
+            Icons.folder_rounded,
+            'Your files stay yours',
+            'Everything you save sits in the audios folder. Drop a song in '
+                'with a file manager and it shows up here. Reinstall the app, '
+                'link the same folder, and your playlists come back.',
+          ),
+          SizedBox(height: 4),
+          Text('You can open this guide again from Settings.',
+              style: TextStyle(fontSize: 12)),
+        ],
+      ),
+    ),
+  );
+}
+
+class _GuideStep extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String body;
+  const _GuideStep(this.icon, this.title, this.body);
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: scheme.primaryContainer,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(icon, size: 20, color: scheme.onPrimaryContainer),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 2),
+              Text(body,
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodySmall
+                      ?.copyWith(height: 1.4)),
+            ],
+          ),
+        ),
+      ]),
+    );
   }
 }
 
@@ -660,6 +791,15 @@ class PlayerSheet extends StatefulWidget {
 }
 
 class _PlayerSheetState extends State<PlayerSheet> {
+  /// Same long-press menu as the library list, from the player's 3-dot button.
+  /// If the action removes or deletes the track, the sheet has nothing left to
+  /// show, so it closes.
+  Future<void> _openTrackMenu(Track t) async {
+    await showTrackMenu(context, t);
+    if (!mounted) return;
+    if (AppStore.I.trackById(t.id) == null) Navigator.pop(context);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -682,17 +822,29 @@ class _PlayerSheetState extends State<PlayerSheet> {
       builder: (context, _) {
         final player = RtPlayer.I;
         final t = player.current ?? widget.track;
-        final dur = player.duration?.inMilliseconds ?? t.durationMs;
         return Container(
           padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('playing from ${player.playingFrom}',
-                  style: Theme.of(context)
-                      .textTheme
-                      .bodySmall
-                      ?.copyWith(color: scheme.onSurfaceVariant)),
+              Row(children: [
+                // Balances the 3-dot button so the caption stays centred.
+                const SizedBox(width: 40),
+                Expanded(
+                  child: Text('playing from ${player.playingFrom}',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context)
+                          .textTheme
+                          .bodySmall
+                          ?.copyWith(color: scheme.onSurfaceVariant)),
+                ),
+                IconButton(
+                  tooltip: 'Track options',
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.more_vert),
+                  onPressed: () => _openTrackMenu(t),
+                ),
+              ]),
               const SizedBox(height: 4),
               Text(t.title,
                   textAlign: TextAlign.center,
@@ -703,24 +855,35 @@ class _PlayerSheetState extends State<PlayerSheet> {
               Text('from ${t.source}',
                   style: Theme.of(context).textTheme.bodySmall),
               const SizedBox(height: 8),
-              StreamBuilder<Duration>(
-                stream: player.positionStream,
-                builder: (context, snap) {
-                  final posD = snap.data ?? Duration.zero;
-                  final frac = dur > 0 ? posD.inMilliseconds / dur : 0.0;
-                  return Column(children: [
-                    Slider(
-                      value: frac.clamp(0.0, 1.0),
-                      onChanged: (v) => player.seek(v),
-                    ),
-                    Row(children: [
-                      Text(mmss(posD.inMilliseconds),
-                          style: Theme.of(context).textTheme.labelSmall),
-                      const Spacer(),
-                      Text(mmss(dur),
-                          style: Theme.of(context).textTheme.labelSmall),
-                    ]),
-                  ]);
+              // Duration MUST come from the engine stream: right after the
+              // first play the total is briefly unknown, and reading
+              // player.duration once left the sheet at 0:00 for the whole
+              // track (it only corrected itself after a loop).
+              StreamBuilder<Duration?>(
+                stream: player.durationStream,
+                initialData: player.duration,
+                builder: (context, durSnap) {
+                  final dur = durSnap.data?.inMilliseconds ?? t.durationMs;
+                  return StreamBuilder<Duration>(
+                    stream: player.positionStream,
+                    builder: (context, snap) {
+                      final posD = snap.data ?? Duration.zero;
+                      final frac = dur > 0 ? posD.inMilliseconds / dur : 0.0;
+                      return Column(children: [
+                        Slider(
+                          value: frac.clamp(0.0, 1.0),
+                          onChanged: (v) => player.seek(v),
+                        ),
+                        Row(children: [
+                          Text(mmss(posD.inMilliseconds),
+                              style: Theme.of(context).textTheme.labelSmall),
+                          const Spacer(),
+                          Text(mmss(dur),
+                              style: Theme.of(context).textTheme.labelSmall),
+                        ]),
+                      ]);
+                    },
+                  );
                 },
               ),
               const SizedBox(height: 8),
@@ -736,7 +899,7 @@ class _PlayerSheetState extends State<PlayerSheet> {
                   scrollDirection: Axis.horizontal,
                   children: [
                     _LoopChip(
-                      label: 'Smart (auto)',
+                      label: '✨ Smart (auto)',
                       selected: player.loop == RtLoop.smart,
                       onTap: () => player.setLoop(RtLoop.smart),
                     ),
@@ -747,12 +910,7 @@ class _PlayerSheetState extends State<PlayerSheet> {
                       selected: player.loop == RtLoop.customRange,
                       onTap: _openRangePicker,
                     ),
-                    const SizedBox(width: 4),
-                    _LoopChip(
-                      label: 'Loop ∞ (forever)',
-                      selected: player.loop == RtLoop.infinite,
-                      onTap: () => player.setLoop(RtLoop.infinite),
-                    ),
+
                   ],
                 ),
               ),
@@ -780,9 +938,21 @@ class _PlayerSheetState extends State<PlayerSheet> {
                       color: scheme.onPrimary,
                       iconSize: 38,
                       onPressed: () => player.toggle(),
-                      icon: Icon(player.playing
-                          ? Icons.pause_rounded
-                          : Icons.play_arrow_rounded),
+                      // Engine-driven state + a real transition, so the
+                      // glyph can never stay stuck on ▶ while audio plays.
+                      icon: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 180),
+                        transitionBuilder: (child, anim) => ScaleTransition(
+                          scale: anim,
+                          child: FadeTransition(opacity: anim, child: child),
+                        ),
+                        child: Icon(
+                          player.playing
+                              ? Icons.pause_rounded
+                              : Icons.play_arrow_rounded,
+                          key: ValueKey(player.playing),
+                        ),
+                      ),
                     ),
                   ),
                   IconButton(
@@ -816,40 +986,60 @@ class _PlayerSheetState extends State<PlayerSheet> {
     final store = AppStore.I;
     final minCtrl = TextEditingController(text: '${store.rangeMin}');
     final maxCtrl = TextEditingController(text: '${store.rangeMax}');
-    final picked = await showDialog<(int, int)?>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-              title: const Text('Custom loop range'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _RangeStepper(label: 'Min loops', controller: minCtrl),
-                  const SizedBox(height: 12),
-                  _RangeStepper(label: 'Max loops', controller: maxCtrl),
-                ],
+    // Bottom sheet, never showDialog: this ColorOS device renders dialogs as
+    // a bare scrim you can't interact with.
+    final picked = await showModalBottomSheet<(int, int)?>(
+      context: context,
+      showDragHandle: true,
+      useSafeArea: true,
+      isScrollControlled: true,
+      builder: (sheetCtx) => Padding(
+        padding:
+            EdgeInsets.only(bottom: MediaQuery.of(sheetCtx).viewInsets.bottom),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('Custom loop range',
+                  style: Theme.of(sheetCtx)
+                      .textTheme
+                      .titleLarge
+                      ?.copyWith(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 6),
+              Text(
+                'Each audio repeats a random number of times between Min and '
+                'Max. Set both to the same number to repeat exactly that many '
+                'times (3 – 3 = exactly 3 plays).',
+                style: Theme.of(sheetCtx).textTheme.bodySmall,
               ),
-              actions: [
-                TextButton(
-                    onPressed: () => Navigator.pop(ctx),
-                    child: const Text('Cancel')),
-                FilledButton(
-                  onPressed: () {
-                    final lo = int.tryParse(minCtrl.text) ?? 3;
-                    final hi = int.tryParse(maxCtrl.text) ?? 5;
-                    Navigator.pop(
-                        ctx, (lo.clamp(1, 999), hi.clamp(1, 999)));
-                  },
-                  child: const Text('Apply'),
-                ),
-              ],
-            ));
+              const SizedBox(height: 16),
+              _RangeStepper(label: 'Min loops', controller: minCtrl),
+              const SizedBox(height: 12),
+              _RangeStepper(label: 'Max loops', controller: maxCtrl),
+              const SizedBox(height: 16),
+              FilledButton(
+                onPressed: () {
+                  final lo = int.tryParse(minCtrl.text) ?? store.rangeMin;
+                  final hi = int.tryParse(maxCtrl.text) ?? store.rangeMax;
+                  Navigator.pop(
+                      sheetCtx, (lo.clamp(1, 999), hi.clamp(1, 999)));
+                },
+                child: const Text('Apply'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (!mounted) return;
     if (picked != null) {
       var (lo, hi) = picked;
       if (hi < lo) hi = lo;
-      store.setRangeMin(lo);
-      store.setRangeMax(hi);
+      store.setRange(lo, hi);
       RtPlayer.I.setLoop(RtLoop.customRange);
-      if (mounted) setState(() {});
+      setState(() {});
     }
   }
 }

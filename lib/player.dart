@@ -45,7 +45,19 @@ class RtPlayer extends ChangeNotifier {
 
   bool _wasPlayingBeforeInterruption = false;
   int _targetLoops = 1;
-  int _loopsDone = 0;
+  /// Completed passes of the CURRENT track. "3 loops" = the track plays 3
+  /// full times, so with a 3-5 range you get exactly 3, 4 or 5 plays.
+  int _passes = 0;
+  /// True once the loop decision for the pass in flight has been made, so the
+  /// 200 ms position ticks can't count the same ending twice.
+  bool _finalPassArmed = false;
+  /// The loop target is latched the first time a real duration is known, so
+  /// Smart's short-clip boost sees the actual length (not 0 during load).
+  bool _targetLatched = false;
+  Duration _lastPos = Duration.zero;
+  /// Index changes inside this window are user/deck-driven, not "a track
+  /// finished its loops" — Smart learning must not treat a skip as a vote.
+  DateTime _manualAdvanceUntil = DateTime.fromMillisecondsSinceEpoch(0);
   /// Consecutive failed loads. Broken files are skipped, but if EVERY file
   /// fails we must stop instead of looping forever (that loop was the
   /// "crashes 2 s after tapping play").
@@ -61,7 +73,7 @@ class RtPlayer extends ChangeNotifier {
   /// runApp() — never blocks the app launch.
   Future<void> ensureBackgroundService() =>
       _bgInit ??= JustAudioBackground.init(
-        androidNotificationChannelId: 'com.reeltune.app.reel_tune.playback',
+        androidNotificationChannelId: 'com.buildwithanshul.reeltunes.playback',
         androidNotificationChannelName: 'ReelTunes playback',
         androidNotificationOngoing: true,
         androidStopForegroundOnPause: true,
@@ -75,22 +87,26 @@ class RtPlayer extends ChangeNotifier {
       reportError('media session init failed', e, s);
     }
     final ap = AudioPlayer(handleInterruptions: false);
-    ap.playerStateStream.listen(_onState);
+    // Engine state is the single source of truth for the UI: play/pause
+    // glyphs flip the instant the platform changes, no matter who initiated
+    // it (mini bar, player sheet, notification, headset, interruption).
+    ap.playerStateStream.listen((_) => _silentFire());
+    ap.playingStream.listen((_) => _silentFire());
+    // Per-track loop steering (see _onPosition / _onIndexChange).
+    ap.positionStream.listen(_onPosition);
+    // Whole-queue end (only reachable on the last pass of the last item).
+    ap.processingStateStream.listen((s) {
+      if (s == ProcessingState.completed) _onPlaylistEnd();
+    });
     // Manual interruption handling via audio_session (just_audio 0.10.x has
     // no public interruption stream) so "keep playing during calls" works.
     asess.AudioSession.instance.then((session) {
       session.interruptionEventStream.listen(_onInterruption);
       session.becomingNoisyEventStream.listen((_) => ap.pause());
     });
-    // Notification / media-widget driven index changes stay in sync here.
-    ap.currentIndexStream.listen((i) {
-      if (i == null || !queuePlayable || i == queueIndex) return;
-      queueIndex = i;
-      current = queue[i];
-      _loopsDone = 0;
-      _targetLoops = _loopsTarget();
-      _silentFire();
-    });
+    // Notification / media-widget / auto-advance driven index changes stay in
+    // sync here.
+    ap.currentIndexStream.listen(_onIndexChange);
     _ap = ap;
     _booted = true;
     _bootCompleter.complete();
@@ -151,6 +167,23 @@ class RtPlayer extends ChangeNotifier {
     return _startCurrent();
   }
 
+  /// Local files play from their path; SAF/content URIs (files imported
+  /// without an app-side copy) play straight from the URI.
+  AudioSource _sourceFor(Track q) {
+    final tag = MediaItem(
+      id: q.id,
+      title: q.title,
+      artist: q.source,
+      duration:
+          q.durationMs > 0 ? Duration(milliseconds: q.durationMs) : null,
+    );
+    final path = q.path;
+    if (path.contains('://')) {
+      return AudioSource.uri(Uri.parse(path), tag: tag);
+    }
+    return AudioSource.file(path, tag: tag);
+  }
+
   /// Loads the (shuffled) queue as one audio source so the media session has
   /// next/previous context, then starts at queueIndex.
   Future<void> _startCurrent() async {
@@ -163,29 +196,20 @@ class RtPlayer extends ChangeNotifier {
     }
     final t = queue[queueIndex];
     current = t;
-    _loopsDone = 0;
-    _targetLoops = _loopsTarget();
     _silentFire();
     try {
-      final sources = <AudioSource>[
-        for (final q in queue)
-          AudioSource.file(
-            q.path,
-            tag: MediaItem(
-              id: q.id,
-              title: q.title,
-              artist: q.source,
-              duration: q.durationMs > 0
-                  ? Duration(milliseconds: q.durationMs)
-                  : null,
-            ),
-          ),
-      ];
+      final sources = <AudioSource>[for (final q in queue) _sourceFor(q)];
       await _ap!.setAudioSource(
         ConcatenatingAudioSource(children: sources),
         initialIndex: queueIndex.clamp(0, sources.length - 1),
       );
-      await _ap!.play();
+      _rememberDuration(t);
+      // Draw this track's loop count AFTER loading, so the engine duration
+      // (and therefore Smart's short-clip boost) is already known.
+      _newTrackLoops();
+      // JustAudioBackground-style play(): the future completes when playback
+      // STOPS, so awaiting it here would freeze every subsequent state update.
+      unawaited(_ap!.play());
       _loadFailures = 0;
     } catch (e, s) {
       reportError('play failed for "${t.title}"', e, s);
@@ -198,25 +222,63 @@ class RtPlayer extends ChangeNotifier {
     _silentFire();
   }
 
+  /// Stores a track's duration the first time the engine knows it. Without
+  /// this, the first play of a fresh import reported 0:00 for the whole clip
+  /// (nothing had been persisted yet, and the old read-once lookup ran before
+  /// the engine had a duration to report).
+  void _rememberDuration(Track t) {
+    final known = _ap!.duration;
+    if (known != null && known.inMilliseconds > 0) {
+      AppStore.I.updateTrackDuration(t.id, known.inMilliseconds);
+      return;
+    }
+    late final StreamSubscription<Duration?> sub;
+    sub = _ap!.durationStream.listen((d) {
+      if (d == null || d.inMilliseconds <= 0) return;
+      sub.cancel();
+      // Only trust it while still sitting on the track we loaded for.
+      if (current?.id == t.id) {
+        AppStore.I.updateTrackDuration(t.id, d.inMilliseconds);
+      }
+    });
+  }
+
+  /// Length hint for loop decisions: the persisted track duration first
+  /// (available instantly), then whatever the engine currently reports.
+  int _durationSecondsHint() {
+    final known = current?.durationMs ?? 0;
+    if (known > 0) return (known / 1000).round();
+    return _ap?.duration?.inSeconds ?? 0;
+  }
+
+  /// How many times the current track should play.
+  /// - Custom range: a fresh random draw from the user's min..max (3-3 means
+  ///   exactly 3 plays).
+  /// - Smart: samples the user's own recent custom-range history so it learns
+  ///   that this person repeats reels 6-8 times, not 3-5. With no history yet
+  ///   it uses the same range. Short reels (<30 s) get one extra pass.
   int _loopsTarget() {
     final store = AppStore.I;
-    var min = store.rangeMin;
-    var max = store.rangeMax;
-    if (loop == RtLoop.smart) {
-      // Smart: short reels loop a bit more; still bounded by the user's range.
-      final secs = (_booted ? _ap!.duration?.inSeconds : null) ?? 0;
-      if (secs < 30) {
-        min = (min).clamp(1, 999);
-        max = (max + 1).clamp(min, 999);
-      }
+    if (loop == RtLoop.customRange) {
+      return randomLoopCount(store.rangeMin, store.rangeMax);
     }
-    return randomLoopCount(min, max);
+    final learned = store.learnedLoopCount();
+    var target = learned ?? randomLoopCount(store.rangeMin, store.rangeMax);
+    final secs = _durationSecondsHint();
+    if (secs > 0 && secs < 30) target += 1;
+    return target.clamp(1, 99);
   }
 
   Future<void> toggle() async {
     if (current == null) return;
     await _whenReady();
-    _ap!.playing ? await _ap!.pause() : await _ap!.play();
+    final ap = _ap!;
+    if (ap.playing) {
+      await ap.pause();
+    } else {
+      // play() completes only when playback stops — never await it.
+      unawaited(ap.play());
+    }
     _silentFire();
   }
 
@@ -233,6 +295,7 @@ class RtPlayer extends ChangeNotifier {
   /// session/notification state transitions stay consistent.
   Future<void> skipNext() async {
     if (queue.isEmpty) return;
+    _markManualAdvance();
     final next = (queueIndex + 1) % queue.length;
     if (!_booted || _ap == null) {
       queueIndex = next;
@@ -261,6 +324,7 @@ class RtPlayer extends ChangeNotifier {
       await _ap!.seek(Duration.zero);
       return;
     }
+    _markManualAdvance();
     try {
       await _ap!.seek(Duration.zero, index: prev);
     } catch (e, s) {
@@ -271,8 +335,8 @@ class RtPlayer extends ChangeNotifier {
 
   void setLoop(RtLoop m) {
     loop = m;
-    _loopsDone = 0;
-    _targetLoops = _loopsTarget();
+    // Re-draw the count and re-arm per-item looping for the track in flight.
+    _newTrackLoops();
     _silentFire();
   }
 
@@ -284,17 +348,116 @@ class RtPlayer extends ChangeNotifier {
     _silentFire();
   }
 
-  /// Completed-state steering: track plays _targetLoops times, then next
-  /// track (which draws its own count). Infinite loop = forever, never
-  /// advancing — the plain "loop like normal music apps" behavior.
-  void _onState(PlayerState s) {
-    if (s.processingState != ProcessingState.completed) return;
-    _loopsDone++;
-    if (_loopsDone < _targetLoops || loop == RtLoop.infinite) {
-      _ap!.seek(Duration.zero).then((_) => _ap!.play());
-    } else {
-      skipNext();
+  // ---- per-track looping -------------------------------------------------
+  //
+  // Why not ProcessingState.completed? Inside a ConcatenatingAudioSource the
+  // platform auto-advances, so "completed" only ever fires at the END of the
+  // whole queue — the old counter never ran, and every track played once.
+  //
+  // Now: every track starts in LoopMode.one (ExoPlayer repeat-one = the
+  // current item repeats exactly, gaplessly, even in the background). The
+  // position watcher counts passes and, on the last one, switches loop mode
+  // off so the queue moves on at the natural boundary. Infinite mode simply
+  // never switches it off.
+  void _newTrackLoops() {
+    _passes = 0;
+    _finalPassArmed = false;
+    _lastPos = Duration.zero;
+    _targetLatched = _durationSecondsHint() > 0;
+    _targetLoops = _loopsTarget();
+    _armLoopMode();
+  }
+
+  void _armLoopMode() {
+    final ap = _ap;
+    if (ap != null) unawaited(ap.setLoopMode(LoopMode.one));
+  }
+
+  void _markManualAdvance() {
+    _manualAdvanceUntil = DateTime.now().add(const Duration(seconds: 1));
+  }
+
+  void _onPosition(Duration pos) {
+    final last = _lastPos;
+    _lastPos = pos;
+
+    // A backward jump after arming means LoopMode.one wrapped the track to
+    // zero: this is the start of the next pass, so re-arm the boundary
+    // decision. (Seeking backwards by hand lands here too — harmless.)
+    if (_finalPassArmed &&
+        pos < last - const Duration(milliseconds: 300)) {
+      _finalPassArmed = false;
+      return;
     }
+
+    final d = _ap?.duration;
+    if (d == null || d.inMilliseconds <= 0) return;
+
+    // First real duration of this track: latch the target now so Smart's
+    // short-clip boost is based on the actual length.
+    if (!_targetLatched) {
+      _targetLoops = _loopsTarget();
+      _targetLatched = true;
+    }
+
+    if (loop == RtLoop.infinite) return; // never advances by itself
+    if (_finalPassArmed) return;
+
+    // Decide before the end. Changing loop mode is a platform call, so it
+    // needs a real head start; a wide margin costs nothing because the only
+    // action is "do not repeat at the boundary" — the pass still plays in
+    // full. (Non-final passes are left in LoopMode.one and just count.)
+    final margin = d < const Duration(seconds: 2)
+        ? Duration(milliseconds: (d.inMilliseconds * 0.35).round())
+        : const Duration(milliseconds: 900);
+    if (pos < d - margin) return;
+
+    _finalPassArmed = true;
+    _passes++;
+    if (_passes >= _targetLoops) {
+      // Final pass: let ExoPlayer leave this item naturally on time.
+      final ap = _ap;
+      if (ap != null) unawaited(ap.setLoopMode(LoopMode.off));
+    }
+  }
+
+  void _onIndexChange(int? i) {
+    if (i == null || !queuePlayable || i == queueIndex) return;
+    final natural = DateTime.now().isAfter(_manualAdvanceUntil);
+    // Smart learning: a custom-range track that played out its whole count
+    // is a real signal of how deep this user likes their loops.
+    if (natural &&
+        loop == RtLoop.customRange &&
+        _targetLoops > 0 &&
+        _passes >= _targetLoops) {
+      AppStore.I.recordLoopCount(_targetLoops);
+    }
+    queueIndex = i;
+    current = i < queue.length ? queue[i] : null;
+    _newTrackLoops();
+    _silentFire();
+  }
+
+  /// Queue exhausted (last pass of the last item). Wrap to the top instead of
+  /// stopping dead — playback here is an endless reel loop.
+  Future<void> _onPlaylistEnd() async {
+    if (!queuePlayable) return;
+    // The last queue item ends here instead of an index change — record its
+    // custom-range completion before wrapping (same Smart-learning signal).
+    if (loop == RtLoop.customRange &&
+        _targetLoops > 0 &&
+        _passes >= _targetLoops) {
+      AppStore.I.recordLoopCount(_targetLoops);
+    }
+    _markManualAdvance();
+    try {
+      await _ap!.seek(Duration.zero, index: 0);
+      _newTrackLoops();
+      unawaited(_ap!.play());
+    } catch (e, s) {
+      reportError('wrap-around failed', e, s);
+    }
+    _silentFire();
   }
 
   /// Audio-focus interruptions (calls, alarms, other apps). Default pauses;

@@ -1,11 +1,10 @@
-import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:receive_intent/receive_intent.dart' as ri;
 
 import 'library.dart';
+import 'library_sync.dart';
 import 'error_report.dart';
 import 'models.dart';
 import 'player.dart';
@@ -34,16 +33,9 @@ class _ReelTuneAppState extends State<ReelTuneApp> {
   void initState() {
     super.initState();
     AppStore.I.init().then((_) async {
-      if (AppStore.I.saveFolder.isEmpty) {
-        // compute default for the first-run prompt
-        final docs = await getApplicationDocumentsDirectory();
-        _defaultDocsPath = docs.path; // kept for fallback writes
-      }
       if (mounted) setState(() => ready = true);
     });
   }
-
-  String? _defaultDocsPath;
 
   @override
   Widget build(BuildContext context) {
@@ -76,30 +68,52 @@ class RootScreen extends StatefulWidget {
   State<RootScreen> createState() => _RootScreenState();
 }
 
-class _RootScreenState extends State<RootScreen> {
+class _RootScreenState extends State<RootScreen>
+    with WidgetsBindingObserver {
   bool ready = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      final sw = Stopwatch()..start();
       const minSplash = Duration(milliseconds: 1400);
       await Future.wait([
         AppStore.I.init(),
         Future.delayed(minSplash), // coin must be visible, even briefly
       ]);
+      // Load the audios folder grant, restore a mirror after a reinstall and
+      // pick up anything dropped in with a file manager.
+      await LibrarySync.init();
       _listenShareIntents();
       if (!mounted) return;
-      if (!AppStore.I.firstRunDone && AppStore.I.saveFolder.isEmpty) {
-        showDialog(
+      if (!AppStore.I.audiosLinked) {
+        await showModalBottomSheet(
           context: context,
-          barrierDismissible: false,
-          builder: (ctx) => const FirstRunDialog(),
+          isScrollControlled: true,
+          showDragHandle: true,
+          isDismissible: false,
+          enableDrag: false,
+          builder: (_) => const FirstRunSheet(),
         );
       }
       if (mounted) setState(() => ready = true);
     });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Coming back from the file manager / another app: files may have been
+    // added to the audios folder, so re-scan before the user looks.
+    if (state == AppLifecycleState.resumed && ready) {
+      LibrarySync.refreshState().then((_) => LibrarySync.sync());
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
   }
 
   @override
@@ -222,50 +236,98 @@ class _CoinLoaderState extends State<CoinLoader>
   }
 }
 
-class FirstRunDialog extends StatefulWidget {
-  const FirstRunDialog({super.key});
+class FirstRunSheet extends StatefulWidget {
+  const FirstRunSheet({super.key});
   @override
-  State<FirstRunDialog> createState() => _FirstRunDialogState();
+  State<FirstRunSheet> createState() => _FirstRunSheetState();
 }
 
-class _FirstRunDialogState extends State<FirstRunDialog> {
-  final nameCtrl =
-      TextEditingController(text: defaultSaveFolderName);
+class _FirstRunSheetState extends State<FirstRunSheet> {
+  bool busy = false;
+
+  Future<void> _choose({bool preferDefault = false}) async {
+    setState(() => busy = true);
+    final picked = await LibrarySync.link(preferDefault: preferDefault);
+    if (!mounted) return;
+    setState(() => busy = false);
+    if (picked == null) return;
+    AppStore.I.completeFirstRun(picked.name ?? defaultSaveFolderName);
+    if (mounted) Navigator.pop(context);
+  }
+
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Where should ReelTunes save your audios?'),
-      content: Column(mainAxisSize: MainAxisSize.min, children: [
-        const Text(
-            'Default: Downloads/ReelTune Audios (created on first save). '
-            'You can change this any time in Settings.'),
-        const SizedBox(height: 12),
-        TextField(
-          controller: nameCtrl,
-          decoration: const InputDecoration(
-              labelText: 'Folder name'),
+    final scheme = Theme.of(context).colorScheme;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Where should your audios live?',
+                style: Theme.of(context)
+                    .textTheme
+                    .titleLarge
+                    ?.copyWith(fontWeight: FontWeight.w600)),
+            const SizedBox(height: 10),
+            Text(
+              'Pick the folder once. Everything you save goes there, and any '
+              'audio you drop in with a file manager shows up here too. Your '
+              'files and playlists stay on the phone even if you uninstall.',
+              style: Theme.of(context)
+                  .textTheme
+                  .bodyMedium
+                  ?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 8),
+            Row(children: [
+              Icon(Icons.folder_outlined, size: 18, color: scheme.primary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                    'The folder is fixed once you pick it — change it later in '
+                    'Settings.',
+                    style: Theme.of(context)
+                        .textTheme
+                        .bodySmall
+                        ?.copyWith(color: scheme.onSurfaceVariant)),
+              ),
+            ]),
+            const SizedBox(height: 20),
+            FilledButton.icon(
+              onPressed: busy ? null : () => _choose(preferDefault: true),
+              icon: busy
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.folder_special_outlined),
+              label: Text(busy ? 'Opening…' : 'Use default folder'),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Downloads/$defaultSaveFolderName',
+              textAlign: TextAlign.center,
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: busy ? null : () => _choose(),
+              icon: const Icon(Icons.folder_open),
+              label: const Text('Choose another folder'),
+            ),
+            const SizedBox(height: 6),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Later'),
+            ),
+          ],
         ),
-      ]),
-      actions: [
-        TextButton(
-          onPressed: () async {
-            // best-effort pre-create on the device volume; graceful if denied
-            try {
-              Directory(
-                      '/storage/emulated/0/Download/$defaultSaveFolderName')
-                  .createSync(recursive: true);
-            } catch (_) {}
-            AppStore.I.completeFirstRun(
-                '/storage/emulated/0/Download/$defaultSaveFolderName');
-            if (context.mounted) Navigator.pop(context);
-          },
-          child: const Text('Use default'),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Choose another folder'),
-        ),
-      ],
+      ),
     );
   }
 }

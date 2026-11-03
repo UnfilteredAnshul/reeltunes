@@ -49,3 +49,7 @@ app.*.map.json
 
 # ReelTune session artifacts
 device_log.txt
+
+# Locally installed agent skills (Android skills CLI)
+.agents/
+.scratch/

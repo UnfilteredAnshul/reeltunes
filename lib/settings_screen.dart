@@ -3,8 +3,15 @@
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
+import 'library_sync.dart';
 import 'models.dart';
+import 'sheets.dart';
+import 'top_toast.dart';
+
+/// Where bug reports and suggestions go (mail app handoff, no server).
+const feedbackEmail = 'contact.unfiltered.anshul@gmail.com';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -18,6 +25,21 @@ class SettingsScreen extends StatelessWidget {
           final store = AppStore.I;
           return ListView(
             children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                child: Card(
+                  margin: EdgeInsets.zero,
+                  color: Theme.of(context).colorScheme.primaryContainer,
+                  child: ListTile(
+                    leading: const Icon(Icons.menu_book_outlined),
+                    title: const Text('How ReelTunes works',
+                        style: TextStyle(fontWeight: FontWeight.w600)),
+                    subtitle: const Text('Short guide. Plain words.'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => showGuideSheet(context),
+                  ),
+                ),
+              ),
               const _Section('Appearance'),
               RadioGroup<AppThemeMode>(
                 groupValue: store.themeMode,
@@ -34,18 +56,40 @@ class SettingsScreen extends StatelessWidget {
               const _Section('Storage'),
               ListTile(
                 title: const Text('Audios folder'),
-                subtitle: Text(store.saveFolder.isEmpty
-                    ? 'Not chosen yet — set it now to decide '
-                        'where extracted audio is saved.'
-                    : store.saveFolder),
-                trailing: const Icon(Icons.folder_copy_outlined),
-                onTap: () => _pickFolder(context, store),
+                subtitle: Text(store.audiosLinked
+                    ? '${store.audiosName} · saved audios, playlists and any '
+                        'file you drop in live here'
+                    : 'Not linked yet — choose the folder where audios are '
+                        'saved. It survives uninstall and reinstalls.'),
+                trailing: Icon(store.audiosLinked
+                    ? Icons.folder_rounded
+                    : Icons.folder_copy_outlined),
+                onTap: () => _linkFolder(context, store),
               ),
-              const ListTile(
-                title: Text('Delete on uninstall'),
-                subtitle: Text(
-                    'Everything ReelTunes saves lives inside the app\'s own '
-                    'storage. Uninstall and it is gone.'),
+              if (store.audiosLinked)
+                ListTile(
+                  leading: const Icon(Icons.sync),
+                  title: const Text('Re-scan folder now'),
+                  subtitle: const Text(
+                      'Adds files you dropped in with a file manager'),
+                  onTap: () async {
+                    final n = await LibrarySync.sync();
+                    if (!context.mounted) return;
+                    showTopToast(
+                        context,
+                        n == 0
+                            ? 'Folder checked — nothing new'
+                            : 'Added $n new audio${n == 1 ? '' : 's'}');
+                  },
+                ),
+              ListTile(
+                title: const Text('Uninstall and your library'),
+                subtitle: Text(store.audiosLinked
+                    ? 'Your audio files and a copy of your playlists stay in '
+                        'that folder. Reinstall, link the same folder, and '
+                        'everything comes back.'
+                    : 'Audio files stay where they are. Link the folder after '
+                        'reinstalling to get your playlists back.'),
               ),
               const _Section('Playback'),
               SwitchListTile(
@@ -64,6 +108,15 @@ class SettingsScreen extends StatelessWidget {
                 value: store.playDuringCalls,
                 onChanged: (v) => store.setPlayDuringCalls(v),
               ),
+              const _Section('Support'),
+              ListTile(
+                leading: const Icon(Icons.bug_report_outlined),
+                title: const Text('Report a bug / Send a suggestion'),
+                subtitle: const Text(
+                    'Opens your mail app, addressed to $feedbackEmail'),
+                trailing: const Icon(Icons.open_in_new, size: 18),
+                onTap: () => _sendFeedback(context),
+              ),
               const _Section('Account'),
               const ListTile(
                 title: Text('ReelTunes Pro'),
@@ -78,9 +131,110 @@ class SettingsScreen extends StatelessWidget {
     );
   }
 
-  Future<void> _pickFolder(BuildContext context, AppStore store) async {
-    final t = await importAudioPickFolder();
-    if (t != null) store.setSaveFolder(t);
+  Future<void> _linkFolder(BuildContext context, AppStore store) async {
+    // The folder is locked once chosen: changing it is deliberate, never a
+    // stray tap. So a linked folder opens a small sheet instead of a picker.
+    if (store.audiosLinked) {
+      final action = await showModalBottomSheet<String>(
+        context: context,
+        showDragHandle: true,
+        builder: (sheetCtx) => SafeArea(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            ListTile(
+              leading: const Icon(Icons.folder_rounded),
+              title: Text(store.audiosName.isEmpty
+                  ? defaultSaveFolderName
+                  : store.audiosName),
+              subtitle: const Text('Locked audios folder'),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.sync),
+              title: const Text('Re-scan now'),
+              subtitle: const Text('Picks up files you dropped in'),
+              onTap: () => Navigator.pop(sheetCtx, 'scan'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.drive_file_move_outline),
+              title: const Text('Change folder'),
+              subtitle: const Text(
+                  'Only affects new saves — existing files stay where they are'),
+              onTap: () => Navigator.pop(sheetCtx, 'change'),
+            ),
+          ]),
+        ),
+      );
+      if (!context.mounted) return;
+      if (action == 'scan') {
+        final n = await LibrarySync.sync();
+        if (!context.mounted) return;
+        showTopToast(
+            context,
+            n == 0
+                ? 'Folder checked — nothing new'
+                : 'Added $n new audio${n == 1 ? '' : 's'}');
+        return;
+      }
+      if (action != 'change') return;
+      final ok = await showModalBottomSheet<bool>(
+        context: context,
+        showDragHandle: true,
+        builder: (sheetCtx) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              const Text('Change the audios folder?',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 18)),
+              const SizedBox(height: 8),
+              const Text('New downloads go to the new folder. Your existing '
+                  'audio files and playlists are not moved.'),
+              const SizedBox(height: 16),
+              Row(children: [
+                TextButton(
+                    onPressed: () => Navigator.pop(sheetCtx, false),
+                    child: const Text('Keep current')),
+                const Spacer(),
+                FilledButton(
+                    onPressed: () => Navigator.pop(sheetCtx, true),
+                    child: const Text('Choose new folder')),
+              ]),
+            ]),
+          ),
+        ),
+      );
+      if (ok != true || !context.mounted) return;
+    }
+
+    final picked = await LibrarySync.link();
+    if (!context.mounted) return;
+    if (picked == null) return;
+    store.completeFirstRun(picked.name ?? defaultSaveFolderName);
+    showTopToast(context,
+        'Folder linked — ${picked.name ?? defaultSaveFolderName}');
+  }
+
+  /// Bug reports / suggestions open the device's mail app pre-addressed to
+  /// the developer — no form, no backend, nothing leaves the phone unless
+  /// the user sends it.
+  Future<void> _sendFeedback(BuildContext context) async {
+    final uri = Uri(
+      scheme: 'mailto',
+      path: feedbackEmail,
+      query:
+          'subject=${Uri.encodeComponent('ReelTunes — bug report / suggestion')}',
+    );
+    var opened = false;
+    try {
+      opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {
+      opened = false;
+    }
+    if (!opened && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('No mail app found — write to $feedbackEmail'),
+        behavior: SnackBarBehavior.floating,
+      ));
+    }
   }
 }
 

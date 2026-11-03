@@ -1,11 +1,13 @@
-// Audio extraction: real yt-dlp bundled on-device via ytdlp_flutter.
-// Fallback web wrapper only fires when this fails.
+// Audio extraction: yt-dlp bundled on-device (CPython + yt-dlp zipapp).
+//
+// Everything needed to extract runs inside the APK: no WebView, no server,
+// no runtime download of executable code. The engine only changes when the
+// app is updated through Google Play.
 
 import 'dart:io';
 
-import 'package:flutter/material.dart';
-import 'package:ytdlp_flutter/ytdlp_flutter.dart';
-
+import 'engine.dart';
+import 'folder_access.dart';
 import 'models.dart';
 
 class Extractor {
@@ -13,23 +15,19 @@ class Extractor {
 
   static Future<void> init() async {
     if (_ready) return;
-    _ready = true; // set first so concurrent callers don't re-init
-    await Ytdlp.init(); // idempotent; downloads engine on Android first run
-    // best-effort engine freshness so extractors track platform changes
-    try {
-      await Ytdlp.update();
-    } catch (_) {}
+    await Engine.init();
+    _ready = true;
   }
 
-  /// Extract audio of [url] into [store.saveFolder]. Returns the saved Track
-  /// or throws for the UI layer to route into the web-wrapper fallback.
+  /// Extracts the audio of [url] and moves it into the linked audios folder.
+  /// Returns the saved Track, or throws for the UI layer to surface.
   static Future<Track> extractAndAdd(AppStore store, String url,
       {String? title, List<String> folderIds = const [],
       void Function(String)? onStatus}) async {
     await init();
     onStatus?.call('Fetching reel…');
 
-    final info = await Ytdlp.getVideoInfo(url);
+    final info = await Engine.getVideoInfo(url);
     var name = (title ?? info.title ?? '')
         .replaceAll(RegExp(r'[/\\:*?\"<>|]'), '_')
         .trim();
@@ -47,20 +45,46 @@ class Extractor {
       name = '$plat · ${now.hour.toString().padLeft(2, '0')}:'
           '${now.minute.toString().padLeft(2, '0')}';
     }
+    name = name.replaceAll(RegExp(r'[/\\:*?\"<>|]'), '_').trim();
 
-    // root / category-subfolder; root itself is store-managed
-    final dir = store.directoryForFolder(folderIds.firstOrNull) ??
-        Directory.systemTemp.path;
-    Directory(dir).createSync(recursive: true);
+    // yt-dlp can only write to a real directory, and Android denies that in
+    // Download, so it writes into the app cache; the bytes are then copied
+    // into the user's folder through SAF.
+    final scratch = Directory(
+        '${Directory.systemTemp.path}${Platform.pathSeparator}reeltune_out');
+    if (!scratch.existsSync()) scratch.createSync(recursive: true);
 
     onStatus?.call('Extracting audio…');
     final taskId = 'reeltune-${DateTime.now().millisecondsSinceEpoch}';
-    final path = await Ytdlp.downloadAudio(
+    final result = await Engine.downloadAudio(
       url: url,
-      outputDir: dir,
+      outputDir: scratch.path,
+      baseName: name,
       taskId: taskId,
-      onProgress: (p) => onStatus?.call('Extracting audio… $p'),
+      onProgress: (percent) =>
+          onStatus?.call('Extracting audio… ${percent.round()}%'),
     );
+
+    final built = File(result.path);
+    final fileName = built.uri.pathSegments.last;
+
+    if (!store.audiosLinked) {
+      throw Exception(
+          'No audios folder linked yet. Choose one in Settings first.');
+    }
+    onStatus?.call('Saving…');
+    final uri = await FolderAccess.save(
+      sourcePath: built.path,
+      fileName: fileName,
+      subdir: _subdirFor(store, folderIds.firstOrNull),
+    );
+    if (uri == null) {
+      throw Exception("Couldn't write into the audios folder.");
+    }
+    // The folder now owns the file; the cache copy is just garbage.
+    try {
+      built.deleteSync();
+    } catch (_) {}
 
     final hosts = Uri.tryParse(url)?.host ?? '';
     String source = 'web';
@@ -72,12 +96,23 @@ class Extractor {
       id: 't${DateTime.now().microsecondsSinceEpoch}',
       title: name,
       source: source,
-      path: path!,
+      path: uri,
+      fileName: fileName,
       durationMs: ((info.durationSeconds ?? 0) * 1000).round(),
       addedAtMs: DateTime.now().millisecondsSinceEpoch,
       folderIds: List.of(folderIds),
     );
     store.addTrack(t);
     return t;
+  }
+
+  /// Playlist name when the reel was saved into one (a sub-folder keeps the
+  /// folder tidy for file-manager users), otherwise the folder root.
+  static String? _subdirFor(AppStore store, String? folderId) {
+    if (folderId == null) return null;
+    final f = store.folderById(folderId);
+    if (f == null) return null;
+    final safe = f.name.replaceAll(RegExp(r'[/\\:*?\"<>|]'), '_').trim();
+    return safe.isEmpty ? null : safe;
   }
 }

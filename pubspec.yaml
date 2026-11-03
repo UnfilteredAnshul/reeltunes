@@ -15,7 +15,6 @@ dependencies:
   shared_preferences: ^2.2.0
   url_launcher: ^6.2.0
   file_picker: ^13.0.0
-  ytdlp_flutter: ^0.1.0
   just_audio_background: ^0.0.1-beta.17
   receive_intent: ^0.2.8
   audio_session: ^0.2.4
@@ -25,6 +24,17 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+
+# Two fixes only, both in `getRelativeIndex` / `onTaskRemoved`:
+#  1. LoopMode.one (ReelTunes' per-track looping) made the media session's
+#     next/previous buttons restart the current track instead of skipping.
+#  2. Swiping the app from Recents left the media notification behind.
+# Upstream is 0.0.1-beta.17 and this is the latest release, so the package is
+# carried locally until it is fixed upstream. See the two "ReelTunes patch"
+# comments in packages/just_audio_background/lib/just_audio_background.dart.
+dependency_overrides:
+  just_audio_background:
+    path: packages/just_audio_background
 
 flutter:
   uses-material-design: true

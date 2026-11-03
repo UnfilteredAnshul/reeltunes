@@ -1,15 +1,18 @@
 // Library home screen: folder selector (list/grid) + track listing (list/grid).
 
+import 'dart:async';
 import 'dart:io';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:reorderable_grid_view/reorderable_grid_view.dart';
 
+import 'folder_access.dart';
 import 'models.dart';
 import 'player.dart';
 import 'settings_screen.dart';
 import 'sheets.dart';
+import 'top_toast.dart';
 
 class LibraryScreen extends StatefulWidget {
   const LibraryScreen({super.key});
@@ -18,21 +21,113 @@ class LibraryScreen extends StatefulWidget {
 }
 
 class _LibraryScreenState extends State<LibraryScreen> {
+  // ---- idle nudge for the import FAB ----
+  // While this page is visible and nothing is playing, the import button
+  // reminds the user what it does after 7 s of stillness, then keeps doing it
+  // for as long as they stay idle. Any touch, scroll or search restarts the
+  // clock. Leaving the page (settings, a sheet, the player) pauses it.
+  Timer? _idleTicker;
+  Timer? _collapseTimer;
+  DateTime _nextNudge = DateTime.now().add(const Duration(seconds: 7));
+  bool _importExpanded = false;
+
+  // ---- name search ----
+  final _searchCtrl = TextEditingController();
+  bool _searchOpen = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // The nudge shows the "Import audio" label for 1.8 s, slips back to the
+    // icon, then waits another 7 s of idle before repeating.
+    _idleTicker =
+        Timer.periodic(const Duration(milliseconds: 500), _idleTick);
+  }
+
+  @override
+  void dispose() {
+    _idleTicker?.cancel();
+    _collapseTimer?.cancel();
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  /// Any touch means "the user is here" — restart the idle clock and tuck the
+  /// label back in immediately.
+  void _noteInteraction() {
+    _nextNudge = DateTime.now().add(const Duration(seconds: 7));
+    _collapseImport();
+  }
+
+  void _collapseImport() {
+    _collapseTimer?.cancel();
+    if (_importExpanded) setState(() => _importExpanded = false);
+  }
+
+  void _idleTick(Timer _) {
+    if (!mounted) return;
+    // Only the library page counts. Settings, sheets and the player sit on
+    // top of it, and the clock should not run while the user is over there.
+    if (!(ModalRoute.of(context)?.isCurrent ?? true)) {
+      _noteInteraction();
+      return;
+    }
+    // Never nudge while audio plays — the mini bar is the focus then.
+    if (RtPlayer.I.playing) {
+      _noteInteraction();
+      return;
+    }
+    if (_importExpanded) return;
+    if (DateTime.now().isBefore(_nextNudge)) return;
+
+    setState(() => _importExpanded = true);
+    _collapseTimer?.cancel();
+    _collapseTimer = Timer(const Duration(milliseconds: 1800), () {
+      if (!mounted) return;
+      setState(() => _importExpanded = false);
+      // Arm the next reminder, so it keeps ticking while the user stays idle.
+      _nextNudge = DateTime.now().add(const Duration(seconds: 7));
+    });
+  }
+
+  void _toggleSearch() {
+    setState(() {
+      _searchOpen = !_searchOpen;
+      if (!_searchOpen) {
+        _searchCtrl.clear();
+        AppStore.I.setSearchQuery('');
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final store = AppStore.I;
-    return ListenableBuilder(
-      listenable: store,
-      builder: (context, _) {
+    return Listener(
+      onPointerDown: (_) => _noteInteraction(),
+      child: ListenableBuilder(
+        listenable: store,
+        builder: (context, _) {
         final selected = store.selectedFolderId;
         return Scaffold(
           appBar: AppBar(
-            title: const Text('ReelTunes'),
+            title: _searchOpen
+                ? TextField(
+                    controller: _searchCtrl,
+                    autofocus: true,
+                    textInputAction: TextInputAction.search,
+                    decoration: const InputDecoration(
+                      hintText: 'Search by name',
+                      border: InputBorder.none,
+                    ),
+                    onChanged: (v) => AppStore.I.setSearchQuery(v),
+                  )
+                : const Text('ReelTunes'),
             actions: [
               IconButton(
-                tooltip: 'New folder',
-                icon: const Icon(Icons.create_new_folder_outlined),
-                onPressed: () => showFolderCreate(context),
+                tooltip: _searchOpen ? 'Close search' : 'Search',
+                icon: Icon(_searchOpen ? Icons.close : Icons.search),
+                onPressed: _toggleSearch,
               ),
               IconButton(
                 tooltip: 'Settings',
@@ -42,33 +137,45 @@ class _LibraryScreenState extends State<LibraryScreen> {
               ),
             ],
           ),
-          // Two stacked actions: import locally, or add via link.
-          floatingActionButton: Column(
-            mainAxisSize: MainAxisSize.min,
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              FloatingActionButton.extended(
-                heroTag: 'importMedia',
-                tooltip: 'Import audio / video files',
-                onPressed: _openImportSheet,
-                icon: const Icon(Icons.folder_open),
-                label: const Text('Import audio'),
-              ),
-              const SizedBox(height: 12),
-              FloatingActionButton.extended(
-                heroTag: 'addReel',
-                onPressed: () => showModalBottomSheet(
-                  context: context,
-                  showDragHandle: true,
-                  useSafeArea: false,
-                  isScrollControlled: true,
-                  builder: (_) => const AddReelSheet(),
+          // Normal mode: import locally or add via link. While rearranging
+          // the FAB becomes the Save action so it is always on screen, even
+          // when the banner scrolled away.
+          floatingActionButton: store.anyArranging
+              ? FloatingActionButton.extended(
+                  heroTag: 'saveOrder',
+                  onPressed: () => store.stopArranging(),
+                  icon: const Icon(Icons.check),
+                  label: const Text('Save order'),
+                )
+              : SizedBox(
+                  // The pill grows to the left inside a fixed-width slot, so
+                  // the Add reel button underneath never shifts while the
+                  // import button is animating.
+                  width: _ImportFab.expandedWidth,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      _ImportFab(
+                        expanded: _importExpanded,
+                        onPressed: _openImportSheet,
+                      ),
+                      const SizedBox(height: 12),
+                      FloatingActionButton.extended(
+                        heroTag: 'addReel',
+                        onPressed: () => showModalBottomSheet(
+                          context: context,
+                          showDragHandle: true,
+                          useSafeArea: false,
+                          isScrollControlled: true,
+                          builder: (_) => const AddReelSheet(),
+                        ),
+                        label: const Text('Add reel'),
+                        icon: const Icon(Icons.link),
+                      ),
+                    ],
+                  ),
                 ),
-                label: const Text('Add reel'),
-                icon: const Icon(Icons.link),
-              ),
-            ],
-          ),
           bottomNavigationBar: RtPlayer.I.current == null
               ? null
               : MiniBar(
@@ -76,13 +183,30 @@ class _LibraryScreenState extends State<LibraryScreen> {
                   onTap: () => openPlayer(RtPlayer.I.current!)),
           body: CustomScrollView(
             slivers: [
+              if (store.anyArranging)
+                SliverToBoxAdapter(
+                    child: _RearrangeBanner(folders: store.arrangingFolders)),
+              if (!store.guideBannerDismissed)
+                const SliverToBoxAdapter(child: _GuideBar()),
               SliverToBoxAdapter(child: _FolderStrip()),
               if (store.folders.isNotEmpty)
                 SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(20, 10, 12, 4),
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
                   sliver: SliverToBoxAdapter(
                     child: Row(children: [
-                      Text('Folders (${store.folders.length})',
+                      IconButton(
+                        tooltip: store.playlistsExpanded
+                            ? 'Hide playlists'
+                            : 'Show playlists',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () => store.togglePlaylists(),
+                        icon: AnimatedRotation(
+                          turns: store.playlistsExpanded ? 0 : -0.25,
+                          duration: const Duration(milliseconds: 180),
+                          child: const Icon(Icons.expand_more),
+                        ),
+                      ),
+                      Text('Playlists (${store.folders.length})',
                           style: Theme.of(context)
                               .textTheme
                               .titleSmall
@@ -91,16 +215,19 @@ class _LibraryScreenState extends State<LibraryScreen> {
                                       .colorScheme
                                       .onSurfaceVariant)),
                       const Spacer(),
-                      _ViewToggle(
-                          value: store.folderView,
-                          on: (s) => store.setFolderView(s.first)),
+                      // A collapsed section has nothing to lay out, so the
+                      // layout switch would only be a dead control.
+                      if (store.playlistsExpanded)
+                        _ViewToggle(
+                            value: store.folderView,
+                            on: (s) => store.setFolderView(s.first)),
                     ]),
                   ),
                 ),
-              if (store.folderView == ViewMode.grid) ...[
-                _FoldersGrid()
-              ] else ...[
-                _FoldersList(),
+              if (store.playlistsExpanded && store.folderView == ViewMode.grid)
+                const _FoldersGrid()
+              else if (store.playlistsExpanded) ...[
+                const _FoldersList(),
                 const SliverToBoxAdapter(child: _NewFolderRow()),
               ],
               SliverPadding(
@@ -123,9 +250,16 @@ class _LibraryScreenState extends State<LibraryScreen> {
                       ),
                     ),
                     IconButton(
-                      tooltip: 'Sort',
-                      onPressed: () => showTrackSortSheet(context),
-                      icon: const Icon(Icons.sort_outlined),
+                      tooltip: store.sortBy == SortBy.manual &&
+                              store.dateFilter == DateFilter.any
+                          ? 'Sort and filter'
+                          : 'Sort and filter (active)',
+                      onPressed: () => showSortFilterSheet(context),
+                      icon: Icon(Icons.tune,
+                          color: store.sortBy != SortBy.manual ||
+                                  store.dateFilter != DateFilter.any
+                              ? Theme.of(context).colorScheme.primary
+                              : null),
                     ),
                     _ViewToggle(
                         value: store.trackView,
@@ -142,6 +276,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
           ),
         );
       },
+      ),
     );
   }
 
@@ -150,9 +285,12 @@ class _LibraryScreenState extends State<LibraryScreen> {
       context: context,
       showDragHandle: true,
       useSafeArea: true,
+      // Re-opening the player must NOT rebuild/restart the queue that is
+      // already playing (that used to reshuffle and jump back to 0:00).
       builder: (_) => PlayerSheet(
         track: t,
-        contextTracks: AppStore.I.visibleTracks.toList(),
+        contextTracks: const [],
+        startPlayback: false,
       ),
     );
   }
@@ -186,14 +324,24 @@ class _LibraryScreenState extends State<LibraryScreen> {
       ),
     );
     if (choice == null || !mounted) return;
-    final n = choice == 'files'
-        ? await importMediaFiles()
-        : await importMediaFolder();
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(n == 0 ? 'No media found there' : 'Imported $n audios'),
-      behavior: SnackBarBehavior.floating,
-    ));
+    try {
+      final n = choice == 'files'
+          ? await importMediaFiles()
+          : await importMediaFolder();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(n == 0
+            ? 'No audio or video files found there'
+            : 'Imported $n audios'),
+        behavior: SnackBarBehavior.floating,
+      ));
+    } catch (e) {
+      // Say WHY it failed (denied access, unreadable folder…) rather than
+      // claiming nothing was found, which was a lie about the folder.
+      debugPrint('import failed: $e');
+      if (!mounted) return;
+      showTopToast(context, "Couldn't open that folder. Try again.");
+    }
   }
 }
 
@@ -219,6 +367,90 @@ class _ViewToggle extends StatelessWidget {
   }
 }
 
+/// Sticky banner for grid rearrange mode: drag freely, then hit Save.
+/// List view keeps its drag handles, so it never needs this mode.
+class _RearrangeBanner extends StatelessWidget {
+  final bool folders;
+  const _RearrangeBanner({required this.folders});
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
+      decoration: BoxDecoration(
+        color: scheme.primaryContainer,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(children: [
+        Icon(folders ? Icons.folder_outlined : Icons.graphic_eq_rounded,
+            size: 20, color: scheme.onPrimaryContainer),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            folders
+                ? 'Rearranging playlists. Drag the cards'
+                : 'Rearranging audios. Drag the cards',
+            style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: scheme.onPrimaryContainer),
+          ),
+        ),
+        FilledButton(
+          onPressed: () => AppStore.I.stopArranging(),
+          child: const Text('Save'),
+        ),
+      ]),
+    );
+  }
+}
+
+/// One-time bar above the playlist strip: a single tap opens the same guide
+/// that lives in Settings.
+class _GuideBar extends StatelessWidget {
+  const _GuideBar();
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      child: Material(
+        color: scheme.secondaryContainer,
+        borderRadius: BorderRadius.circular(14),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 4, 4, 4),
+          child: Row(children: [
+            Icon(Icons.lightbulb_outline,
+                size: 20, color: scheme.onSecondaryContainer),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text('First time here? Here is how it works.',
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: scheme.onSecondaryContainer)),
+            ),
+            TextButton(
+              onPressed: () {
+                AppStore.I.dismissGuideBanner();
+                showGuideSheet(context);
+              },
+              child: const Text('Guide'),
+            ),
+            IconButton(
+              tooltip: 'Close',
+              visualDensity: VisualDensity.compact,
+              onPressed: () => AppStore.I.dismissGuideBanner(),
+              icon: const Icon(Icons.close, size: 18),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
 class _FolderStrip extends StatelessWidget {
   const _FolderStrip();
   @override
@@ -227,7 +459,7 @@ class _FolderStrip extends StatelessWidget {
     final chips = <(String?, String, String)>[
       (null, 'All', '🎧'),
       ...store.folders.map((f) => (f.id, f.name, f.emoji)),
-      (null, 'New folder', '➕'),
+      (null, 'New playlist', '➕'),
     ];
     return SizedBox(
       height: 48,
@@ -331,7 +563,7 @@ class _NewFolderRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) => ListTile(
         leading: const Text('➕', style: TextStyle(fontSize: 22)),
-        title: const Text('New folder'),
+        title: const Text('New playlist'),
         onTap: () => showFolderCreate(context),
       );
 }
@@ -353,13 +585,21 @@ class _FoldersGrid extends StatelessWidget {
                 mainAxisExtent: 110,
                 crossAxisSpacing: 8,
                 mainAxisSpacing: 8),
+            // Grid dragging only inside the explicit rearrange mode (hold a
+            // card > Rearrange > drag > Save). Outside it, drags fought taps.
+            dragEnabled: store.arrangingFolders,
+            dragStartDelay: store.arrangingFolders
+                ? Duration.zero
+                : const Duration(milliseconds: 260),
             onReorder: (o, n) => store.reorderFolders(o, n),
             itemCount: store.folders.length,
             itemBuilder: (c, i) {
               final f = store.folders[i];
               return KeyedSubtree(
                 key: ValueKey(f.id),
-                child: _folderCard(c, store, f, store.selectedFolderId == f.id),
+                child: _folderCard(c, store, f,
+                    store.selectedFolderId == f.id,
+                    arranging: store.arrangingFolders),
               );
             },
           ),
@@ -370,8 +610,8 @@ class _FoldersGrid extends StatelessWidget {
     );
   }
 
-  Widget _folderCard(
-      BuildContext context, AppStore store, Folder f, bool selected) {
+  Widget _folderCard(BuildContext context, AppStore store, Folder f,
+      bool selected, {bool arranging = false}) {
     final scheme = Theme.of(context).colorScheme;
     return Card(
       color: selected ? scheme.primaryContainer : null,
@@ -381,10 +621,14 @@ class _FoldersGrid extends StatelessWidget {
               ? BorderSide(color: scheme.primary, width: 1.5)
               : BorderSide.none),
       child: InkWell(
-        onTap: () {
-          store.selectFolder(selected ? null : f.id);
-        },
-        onLongPress: () => showFolderMenu(context, f),
+        // In rearrange mode taps and menus are inert — dragging is all that's
+        // live, so a mis-tap can never select or open a menu mid-drag.
+        onTap: arranging
+            ? null
+            : () => store.selectFolder(selected ? null : f.id),
+        onLongPress: arranging
+            ? null
+            : () => showFolderMenu(context, f, allowRearrange: true),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
@@ -415,7 +659,7 @@ class _FoldersGrid extends StatelessWidget {
             children: [
               Text('➕', style: TextStyle(fontSize: 30)),
               SizedBox(height: 6),
-              Text('New folder'),
+              Text('New playlist'),
             ],
           ),
         ),
@@ -428,54 +672,195 @@ class _FoldersGrid extends StatelessWidget {
 // Tracks section
 // ---------------------------------------------------------------------------
 
-/// Sort picker: manual (drag order) / name / date added with asc-desc toggle.
-Future<void> showTrackSortSheet(BuildContext context) async {
-  await showModalBottomSheet<void>(
+/// One sheet, two halves: sort on the left, date filter on the right. Both
+/// apply immediately and the sheet stays open, so the user can set both in
+/// one pass or just one of them.
+Future<void> showSortFilterSheet(BuildContext context) {
+  final store = AppStore.I;
+  return showModalBottomSheet<void>(
     context: context,
     showDragHandle: true,
-    builder: (sheetCtx) {
-      final store = AppStore.I;
-      return Padding(
-        padding: const EdgeInsets.fromLTRB(0, 4, 0, 24),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          RadioGroup<SortBy>(
-            groupValue: store.sortBy,
-            onChanged: (v) {
-              store.setSortBy(v!);
-              Navigator.pop(sheetCtx);
-            },
-            child: const Column(children: [
-              _SortRadio(SortBy.manual, 'Manual (drag to rearrange)'),
-              _SortRadio(SortBy.name, 'Name'),
-              _SortRadio(SortBy.dateAdded, 'Date added'),
-            ]),
+    useSafeArea: true,
+    builder: (sheetCtx) => SafeArea(
+      child: ListenableBuilder(
+        listenable: store,
+        builder: (context, _) => Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                child: Text('Sort and filter',
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleLarge
+                        ?.copyWith(fontWeight: FontWeight.w600)),
+              ),
+              IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: _SortHalf(store)),
+                    VerticalDivider(
+                        width: 1,
+                        thickness: 1,
+                        color: Theme.of(context)
+                            .colorScheme
+                            .outlineVariant
+                            .withAlpha(120)),
+                    Expanded(child: _FilterHalf(store)),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextButton(
+                onPressed: () => Navigator.pop(sheetCtx),
+                child: const Text('Done'),
+              ),
+            ],
           ),
-          if (store.sortBy != SortBy.manual)
-            SwitchListTile(
-              title: Text(store.sortBy == SortBy.name
-                  ? 'Ascending (A → Z)'
-                  : 'Ascending (oldest first)'),
-              value: store.sortAsc,
-              onChanged: (v) => store.setSortAsc(v),
-            ),
-        ]),
-      );
-    },
+        ),
+      ),
+    ),
   );
 }
 
-class _SortRadio extends StatelessWidget {
-  final SortBy value;
-  final String title;
-  const _SortRadio(this.value, this.title);
+class _HalfTitle extends StatelessWidget {
+  final String text;
+  const _HalfTitle(this.text);
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(8, 2, 8, 6),
+        child: Text(text,
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                letterSpacing: 0.6,
+                fontWeight: FontWeight.w700,
+                color: Theme.of(context).colorScheme.onSurfaceVariant)),
+      );
+}
+
+class _SortHalf extends StatelessWidget {
+  final AppStore store;
+  const _SortHalf(this.store);
   @override
   Widget build(BuildContext context) {
-    final t = Theme.of(context);
-    return Theme(
-        data: t.copyWith(
-            listTileTheme: t.listTileTheme
-                .copyWith(dense: true, visualDensity: VisualDensity.compact)),
-        child: RadioListTile<SortBy>(value: value, title: Text(title)));
+    final asc = store.sortBy == SortBy.name ? 'A to Z' : 'Oldest first';
+    final desc = store.sortBy == SortBy.name ? 'Z to A' : 'Newest first';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const _HalfTitle('SORT'),
+        _ChoiceRow(
+            label: 'Manual',
+            hint: 'your own order',
+            selected: store.sortBy == SortBy.manual,
+            onTap: () => store.setSortBy(SortBy.manual)),
+        _ChoiceRow(
+            label: 'Name',
+            selected: store.sortBy == SortBy.name,
+            onTap: () => store.setSortBy(SortBy.name)),
+        _ChoiceRow(
+            label: 'Date added',
+            selected: store.sortBy == SortBy.dateAdded,
+            onTap: () => store.setSortBy(SortBy.dateAdded)),
+        if (store.sortBy != SortBy.manual)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => store.setSortAsc(!store.sortAsc),
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                child: Row(children: [
+                  Icon(
+                      store.sortAsc
+                          ? Icons.arrow_upward_rounded
+                          : Icons.arrow_downward_rounded,
+                      size: 14,
+                      color: Theme.of(context).colorScheme.primary),
+                  const SizedBox(width: 4),
+                  Flexible(
+                    child: Text(store.sortAsc ? asc : desc,
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: Theme.of(context).colorScheme.primary)),
+                  ),
+                ]),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _FilterHalf extends StatelessWidget {
+  final AppStore store;
+  const _FilterHalf(this.store);
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const _HalfTitle('DATE ADDED'),
+        for (final f in DateFilter.values)
+          _ChoiceRow(
+              label: f.label,
+              selected: store.dateFilter == f,
+              onTap: () => store.setDateFilter(f)),
+      ],
+    );
+  }
+}
+
+/// Compact radio row. RadioListTile is too tall for two side-by-side columns.
+class _ChoiceRow extends StatelessWidget {
+  final String label;
+  final String? hint;
+  final bool selected;
+  final VoidCallback onTap;
+  const _ChoiceRow(
+      {required this.label,
+      this.hint,
+      required this.selected,
+      required this.onTap});
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+        child: Row(children: [
+          Icon(selected ? Icons.radio_button_checked : Icons.radio_button_off,
+              size: 18, color: selected ? scheme.primary : scheme.outline),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label,
+                    style: TextStyle(
+                        fontSize: 14,
+                        fontWeight:
+                            selected ? FontWeight.w600 : FontWeight.w400)),
+                if (hint != null)
+                  Text(hint!,
+                      style: Theme.of(context)
+                          .textTheme
+                          .bodySmall
+                          ?.copyWith(fontSize: 11)),
+              ],
+            ),
+          ),
+        ]),
+      ),
+    );
   }
 }
 
@@ -497,11 +882,22 @@ class _TracksView extends StatelessWidget {
                 mainAxisExtent: 150,
                 crossAxisSpacing: 8,
                 mainAxisSpacing: 8),
+            // Grid drag fights the UI, so dragging is OFF outside the
+            // explicit rearrange mode (hold a card in grid > Rearrange).
+            dragEnabled: store.arrangingTracks,
+            dragStartDelay: store.arrangingTracks
+                ? Duration.zero
+                : const Duration(milliseconds: 260),
             onReorder: (o, n) => store.reorderVisibleTracks(o, n),
             itemCount: list.length,
             itemBuilder: (c, i) => KeyedSubtree(
               key: ValueKey(list[i].id),
-              child: _TrackCard(track: list[i], onTap: () => _play(list[i], c)),
+              child: _TrackCard(
+                  track: list[i],
+                  rearrangeMode: store.arrangingTracks,
+                  onTap: store.arrangingTracks
+                      ? null
+                      : () => _play(list[i], c)),
             ),
           ),
         ),
@@ -542,15 +938,20 @@ class _TracksView extends StatelessWidget {
 
 class _TrackCard extends StatelessWidget {
   final Track track;
-  final VoidCallback onTap;
-  const _TrackCard({required this.track, required this.onTap});
+  final VoidCallback? onTap;
+  /// Grid rearrange mode: long-press starts card drag instead of the menu.
+  final bool rearrangeMode;
+  const _TrackCard(
+      {required this.track, required this.onTap, this.rearrangeMode = false});
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Card(
       child: InkWell(
         onTap: onTap,
-        onLongPress: () => _trackMenu(context, track),
+        onLongPress: rearrangeMode
+            ? null
+            : () => showTrackMenu(context, track, allowRearrange: true),
         child: Padding(
           padding: const EdgeInsets.all(10),
           child: Column(
@@ -573,19 +974,107 @@ class _TrackCard extends StatelessWidget {
 class _EmptyLibrary extends StatelessWidget {
   const _EmptyLibrary();
   @override
-  Widget build(BuildContext context) => SliverToBoxAdapter(
-        child: Padding(
-          padding: const EdgeInsets.all(40),
-          child: Column(children: [
-            Icon(Icons.library_music_outlined,
-                size: 56, color: Theme.of(context).colorScheme.outline),
-            const SizedBox(height: 12),
-            Text('No audios yet. Tap + to add a reel or import one.',
-                textAlign: TextAlign.center),
-          ]),
-        ),
-      );
+  Widget build(BuildContext context) {
+    final store = AppStore.I;
+    final filtered = store.searchQuery.trim().isNotEmpty ||
+        store.dateFilter != DateFilter.any;
+    return SliverToBoxAdapter(
+      child: Padding(
+        padding: const EdgeInsets.all(40),
+        child: Column(children: [
+          Icon(filtered ? Icons.search_off : Icons.library_music_outlined,
+              size: 56, color: Theme.of(context).colorScheme.outline),
+          const SizedBox(height: 12),
+          Text(
+              filtered
+                  ? 'No audios match your search or date filter.'
+                  : 'No audios yet. Tap + to add a reel or import one.',
+              textAlign: TextAlign.center),
+        ]),
+      ),
+    );
+  }
 }
+
+// ---------------------------------------------------------------------------
+// Import FAB (icon-only, expands on idle)
+// ---------------------------------------------------------------------------
+
+/// Import button: a folder icon in a circle by default. When the app has been
+/// idle it morphs into a pill, shows "Import audio" for a moment, then slips
+/// back. Animated by hand because the stock FAB's isExtended flag swaps
+/// abruptly (and extended mode keeps a permanent 8 px label gap).
+class _ImportFab extends StatelessWidget {
+  static const double _collapsed = 56;
+
+  /// Exposed so the FAB slot can reserve this width, which keeps the button
+  /// under it from shifting while the pill animates.
+  static const double expandedWidth = 184;
+  final bool expanded;
+  final VoidCallback onPressed;
+  const _ImportFab({required this.expanded, required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 260),
+      curve: Curves.easeOutCubic,
+      width: expanded ? expandedWidth : _collapsed,
+      height: _collapsed,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: scheme.primaryContainer,
+        borderRadius: BorderRadius.circular(_collapsed / 2),
+        boxShadow: const [
+          BoxShadow(
+              color: Color(0x33000000), blurRadius: 8, offset: Offset(0, 3)),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onPressed,
+          customBorder: const StadiumBorder(),
+          // Lay the full pill out regardless of the animated width, then let
+          // the container clip it — no RenderFlex overflow while it morphs.
+          child: OverflowBox(
+            alignment: Alignment.centerLeft,
+            minWidth: expandedWidth,
+            maxWidth: expandedWidth,
+            child: Row(children: [
+              const SizedBox(width: 16),
+              Icon(Icons.folder_open, color: scheme.onPrimaryContainer),
+              ClipRect(
+                child: TweenAnimationBuilder<double>(
+                  tween: Tween(begin: 0, end: expanded ? 1 : 0),
+                  duration: const Duration(milliseconds: 260),
+                  curve: Curves.easeOutCubic,
+                  builder: (context, v, child) => Align(
+                    alignment: Alignment.centerLeft,
+                    widthFactor: v,
+                    child: Opacity(opacity: v, child: child),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 10, right: 16),
+                    child: Text(
+                      'Import audio',
+                      maxLines: 1,
+                      style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: scheme.onPrimaryContainer),
+                    ),
+                  ),
+                ),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 
 // ---------------------------------------------------------------------------
 // Track tile + mini bar + tile helpers
@@ -609,7 +1098,7 @@ class TrackTile extends StatelessWidget {
             color: scheme.onSurfaceVariant);
     return ListTile(
       onTap: onTap,
-      onLongPress: () => _trackMenu(context, track),
+      onLongPress: () => showTrackMenu(context, track),
       title: Text(track.title,
           style: TextStyle(
               fontWeight: isCurrent ? FontWeight.w600 : FontWeight.w400)),
@@ -636,13 +1125,22 @@ class TrackTile extends StatelessWidget {
 }
 
 // Long-press actions on a track: rename / add-to-folders / delete.
-Future<void> _trackMenu(BuildContext context, Track t) async {
+Future<void> showTrackMenu(BuildContext context, Track t,
+    {bool allowRearrange = false}) async {
   final store = AppStore.I;
   final action = await showModalBottomSheet<_MenuAction>(
     context: context,
     showDragHandle: true,
     builder: (_) => SafeArea(
       child: Column(mainAxisSize: MainAxisSize.min, children: [
+        if (allowRearrange)
+          ListTile(
+            leading: const Icon(Icons.swap_vert_rounded),
+            title: const Text('Rearrange'),
+            subtitle: const Text('Drag the cards into place, then Save',
+                style: TextStyle(fontSize: 12)),
+            onTap: () => Navigator.pop(context, _MenuAction.rearrange),
+          ),
         ListTile(
           leading: const Icon(Icons.edit_outlined),
           title: const Text('Rename'),
@@ -650,14 +1148,21 @@ Future<void> _trackMenu(BuildContext context, Track t) async {
         ),
         ListTile(
           leading: const Icon(Icons.folder_open),
-          title: const Text('Manage folders'),
+          title: const Text('Manage playlists'),
           onTap: () => Navigator.pop(context, _MenuAction.move),
+        ),
+        ListTile(
+          leading: const Icon(Icons.playlist_remove),
+          title: const Text('Remove from ReelTunes'),
+          subtitle: const Text('Keeps the file on your phone',
+              style: TextStyle(fontSize: 12)),
+          onTap: () => Navigator.pop(context, _MenuAction.remove),
         ),
         ListTile(
           leading: Icon(
               Icons.delete_outline,
               color: Theme.of(context).colorScheme.error),
-          title: Text('Delete',
+          title: Text('Delete audio and file',
               style: TextStyle(
                   color: Theme.of(context).colorScheme.error,
                   fontWeight: FontWeight.w600)),
@@ -668,6 +1173,8 @@ Future<void> _trackMenu(BuildContext context, Track t) async {
   );
   if (!context.mounted) return;
   switch (action) {
+    case _MenuAction.rearrange:
+      store.startArranging(folders: false);
     case _MenuAction.rename:
       final ctrl = TextEditingController(text: t.title);
       final name = await showInputSheet(
@@ -681,11 +1188,24 @@ Future<void> _trackMenu(BuildContext context, Track t) async {
       }
     case _MenuAction.move:
       await showFolderPick(context, t);
+    case _MenuAction.remove:
+      removeTrackFromLibrary(context, t);
     case _MenuAction.delete:
       await deleteTrackWithConfirm(context, t);
     case null:
       break;
   }
+}
+
+/// Takes a track out of the library without touching the file behind it.
+/// This is the safe default: the audio stays in the audios folder (so a
+/// re-scan would bring it back), and files imported from elsewhere are never
+/// deleted from their original location.
+void removeTrackFromLibrary(BuildContext context, Track t) {
+  AppStore.I.removeTrackKeepFile(t.id);
+  RtPlayer.I.removeIfCurrent(t.id);
+  showTopToast(
+      context, 'Removed from ReelTunes. The file is still on your phone.');
 }
 
 /// Delete flow honoring the "don't ask again" preference. The audio file is
@@ -702,11 +1222,12 @@ Future<void> deleteTrackWithConfirm(BuildContext context, Track t) async {
         padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment:
             CrossAxisAlignment.stretch, children: [
-          const Text('Delete audio?',
+          const Text('Delete audio and file?',
               style: TextStyle(fontWeight: FontWeight.w600, fontSize: 18)),
           const SizedBox(height: 8),
-          Text('"${t.title}" will be removed from your library and its '
-              'audio file will be deleted from the device.',
+          Text('"${t.title}" will be removed from your library and the audio '
+              'file will be deleted from this phone. Only want it out of the '
+              'app? Use "Remove from ReelTunes" instead.',
               style: Theme.of(sheetCtx).textTheme.bodySmall),
           const SizedBox(height: 8),
           ValueListenableBuilder<bool>(
@@ -743,12 +1264,16 @@ Future<void> deleteTrackWithConfirm(BuildContext context, Track t) async {
     if (ok != true || !context.mounted) return;
   }
   // Delete semantics: library-OWNED files (extracted audio, copied imports)
-  // live inside the save root and are deleted from disk with the track.
-  // Reference-imported files (the user's own videos) are NEVER deleted from
-  // their original location — removing from the library only unlists them.
-  final root = store.saveFolderWithRoot();
+  // live inside the audios folder and are deleted with the track. Files the
+  // user referenced from somewhere else are NEVER deleted from their original
+  // location — removing from the library only unlists them.
+  final root = store.audiosUri;
   try {
-    if (root != null && t.path.startsWith(root)) {
+    if (t.path.startsWith('content://') &&
+        root.isNotEmpty &&
+        t.path.startsWith(root)) {
+      await FolderAccess.delete(t.path);
+    } else if (root.isNotEmpty && t.path.startsWith(root)) {
       File(t.path).deleteSync();
     }
   } catch (_) {}
@@ -756,7 +1281,7 @@ Future<void> deleteTrackWithConfirm(BuildContext context, Track t) async {
   RtPlayer.I.removeIfCurrent(t.id);
 }
 
-enum _MenuAction { rename, move, delete }
+enum _MenuAction { rearrange, rename, move, remove, delete }
 
 class MiniBar extends StatelessWidget {
   final Track track;
@@ -804,14 +1329,26 @@ class MiniBar extends StatelessWidget {
                 trailing: StreamBuilder<bool>(
                   stream: player.playingStream,
                   initialData: player.playing,
-                  builder: (c, s) => IconButton(
-                    onPressed: () => player.toggle(),
-                    icon: Icon(
-                        (s.data ?? false)
-                            ? Icons.pause_rounded
-                            : Icons.play_arrow_rounded,
-                        color: scheme.onSurface),
-                  ),
+                  builder: (c, s) {
+                    final isPlaying = s.data ?? false;
+                    return IconButton(
+                      onPressed: () => player.toggle(),
+                      icon: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 180),
+                        transitionBuilder: (child, anim) => ScaleTransition(
+                          scale: anim,
+                          child: FadeTransition(opacity: anim, child: child),
+                        ),
+                        child: Icon(
+                          isPlaying
+                              ? Icons.pause_rounded
+                              : Icons.play_arrow_rounded,
+                          key: ValueKey(isPlaying),
+                          color: scheme.onSurface,
+                        ),
+                      ),
+                    );
+                  },
                 ),
               ),
               StreamBuilder<Duration>(
@@ -843,99 +1380,88 @@ const _audioExtensions = ['mp3', 'm4a', 'aac', 'wav', 'ogg', 'oga', 'opus', 'fla
 const _videoExtensions = ['mp4', 'mkv', 'webm', 'avi', 'm4v', 'mov', '3gp'];
 const _mediaExtensions = [..._audioExtensions, ..._videoExtensions];
 
-bool _isMediaPath(String p) {
-  final ext = p.split('.').last.toLowerCase();
-  return _mediaExtensions.contains(ext);
+/// Media picking and folder scanning run natively over the Storage Access
+/// Framework (see MainActivity): scoped storage denies raw File access to
+/// DCIM/Movies/Download even with READ_MEDIA_* (those don't grant directory
+/// listing), and SAF needs no storage permission at all. Only content:// URIs
+/// come back — nothing is copied, moved or extracted.
+const _mediaChannel = MethodChannel('com.buildwithanshul.reeltunes/media');
+
+String _extensionOf(String nameOrPath) {
+  final dot = nameOrPath.lastIndexOf('.');
+  if (dot < 0 || dot == nameOrPath.length - 1) return '';
+  return nameOrPath.substring(dot + 1).toLowerCase();
 }
 
-/// Reference-import a file: the Track points AT the original file. Nothing
-/// is copied — so importing 200 videos from your device adds zero bytes.
-Track _trackFromPath(String path) {
-  final ext = path.split('.').last.toLowerCase();
-  final clean = path.split(Platform.pathSeparator).last
-      .replaceAll(RegExp(r'\.[a-z0-9]+$', caseSensitive: false), '')
-      .trim();
-  return Track(
-    id: _trackId(),
-    title: clean,
-    source: _videoExtensions.contains(ext) ? 'video' : 'file',
-    path: path,
-    folderIds: const [],
-    addedAtMs: DateTime.now().millisecondsSinceEpoch,
-  );
+String _titleFromName(String name) => name
+    .replaceAll(RegExp(r'\.[a-z0-9]+$', caseSensitive: false), '')
+    .trim();
+
+/// Picks media over SAF and returns reference Tracks pointing at the
+/// content:// URI — videos play their own audio layer, and our delete guard
+/// never touches files outside the save root.
+Future<List<Track>> _pickMedia({required bool folder}) async {
+  List<dynamic> rows;
+  try {
+    rows = await _mediaChannel.invokeMethod<List<dynamic>>(
+            folder ? 'pickMediaFolder' : 'pickMediaFiles') ??
+        const <dynamic>[];
+  } on MissingPluginException {
+    throw Exception('Media import is unavailable on this device.');
+  } on PlatformException catch (e) {
+    throw Exception(e.message ?? e.code);
+  }
+
+  final picked = <Track>[];
+  for (final raw in rows) {
+    if (raw is! Map) continue;
+    final uri = raw['uri']?.toString() ?? '';
+    final name = raw['name']?.toString() ?? '';
+    final ext = _extensionOf(name);
+    if (uri.isEmpty || !_mediaExtensions.contains(ext)) continue;
+    picked.add(Track(
+      id: _trackId(),
+      title: _titleFromName(name),
+      source: _videoExtensions.contains(ext) ? 'video' : 'file',
+      path: uri,
+      fileName: name,
+      folderIds: const [],
+      addedAtMs: DateTime.now().millisecondsSinceEpoch,
+    ));
+  }
+  return picked;
 }
 
-/// Pick files (audio or video). Returns how many were imported.
+/// Pick audio/video files (one or many). Returns how many were imported.
 Future<int> importMediaFiles() async {
-  final files = await FilePicker.pickFiles(
-      type: FileType.custom, allowedExtensions: _mediaExtensions);
-  final paths = files
-      .map((f) => f.path)
-      .whereType<String>()
-      .where(_isMediaPath)
-      .toList();
-  final store = AppStore.I;
-  for (final p in paths) {
-    store.addTrack(_trackFromPath(p));
+  final picked = await _pickMedia(folder: false);
+  for (final t in picked) {
+    AppStore.I.addTrack(t);
   }
-  return paths.length;
+  return picked.length;
 }
 
-/// Pick an entire folder and import every media file it contains (top
-/// level — the user's videos folder is usually flat).
+/// Pick a folder and import every audio/video inside it, recursively —
+/// DCIM-style folders keep their clips in sub-folders such as Camera/.
 Future<int> importMediaFolder() async {
-  final dir = await FilePicker.getDirectoryPath();
-  if (dir == null) return 0;
-  final entries = Directory(dir)
-      .listSync()
-      .whereType<File>()
-      .map((f) => f.path)
-      .where(_isMediaPath)
-      .toList()
-    ..sort();
-  final store = AppStore.I;
-  for (final p in entries) {
-    store.addTrack(_trackFromPath(p));
+  final picked = await _pickMedia(folder: true);
+  for (final t in picked) {
+    AppStore.I.addTrack(t);
   }
-  return entries.length;
+  return picked.length;
 }
 
 Future<Track?> importAudioFile([BuildContext? context]) async {
-  final picked = (await FilePicker.pickFiles(type: FileType.audio)).firstOrNull;
-  if (picked == null || picked.path == null) return null;
-
-  final store = AppStore.I;
-  final dirName = store.saveFolder.isNotEmpty
-      ? store.saveFolder
-      : Directory.systemTemp.path;
-  try {
-    Directory(dirName).createSync(recursive: true);
-  } catch (_) {}
-  final id = _trackId();
-  final cleanName = picked.name
-      .replaceAll(RegExp(r'\.[a-z0-9]+$', caseSensitive: false), '');
-  final target =
-      File('$dirName${Platform.pathSeparator}${id}_$cleanName');
-
-  var t = Track(
-      id: id,
-      title: cleanName,
-      source: 'import',
-      path: picked.path!,
-      addedAtMs: DateTime.now().millisecondsSinceEpoch);
-  try {
-    await File(picked.path!).copy(target.path);
-    t = Track(
-        id: id,
-        title: cleanName,
-        source: 'import',
-        path: target.path,
-        addedAtMs: DateTime.now().millisecondsSinceEpoch);
-  } catch (_) {
-    // couldn't reach the picked volume; keep the picker's cache copy
+  // Audio OR video, reference-imported over SAF (nothing copied): a video
+  // here simply plays its own audio layer. Used by Add reel's
+  // "Or import an audio file instead".
+  final picked = await _pickMedia(folder: false);
+  if (picked.isEmpty) return null;
+  for (final t in picked) {
+    AppStore.I.addTrack(t);
   }
-  store.addTrack(t);
-  return t;
+  return picked.first;
 }
 
 String _trackId() => 't${DateTime.now().microsecondsSinceEpoch}';
+

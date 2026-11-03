@@ -8,6 +8,7 @@
     <application
         android:label="ReelTunes"
         android:name="${applicationName}"
+        android:extractNativeLibs="true"
         android:icon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"
@@ -70,6 +71,11 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- url_launcher: mailto handoff for the Settings "Report a bug" row -->
+        <intent>
+            <action android:name="android.intent.action.SENDTO"/>
+            <data android:scheme="mailto"/>
         </intent>
     </queries>
 </manifest>
