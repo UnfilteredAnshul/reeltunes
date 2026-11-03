@@ -4,13 +4,14 @@
 - **Name:** ReelTunes · `applicationId com.buildwithanshul.reeltunes` (permanent — cannot change after the first Play upload) · Dart package `reel_tune` · project folder `E:\Projects\ReelTune`.
 - **What it is:** Android Flutter music player for short-form video audio. Paste a TikTok / Instagram Reel / YouTube Shorts link → audio is extracted **on-device** by a bundled CPython + yt-dlp engine → the file is written into the user's own audios folder and played offline with loop/shuffle controls. Also imports existing phone media through SAF (videos play their own audio, nothing copied).
 - **Pitch:** 100% on-device library. No cloud, no login, no server, no database. The audios folder is the source of truth: drop a song in with a file manager and it appears; uninstall the app and the files plus a portable copy of the playlists stay behind.
-- **Status (2026-11-02):** debug build installed and clean-launching on a Realme RMX3381 (ColorOS, Android 13 / SDK 33). Since the last doc: engine rewritten GPL-free, SAF audios folder added (link once, auto-scan, mirror/restore), combined sort+filter, guide sheet, playlist collapse, repeating idle nudge, top toast, remove-vs-delete flows. Engine runs end-to-end (Python → SSL → yt-dlp); the YouTube 403 from the old bundled yt-dlp is fixed by updating to 2026.10.26 — a successful save still needs user testing.
-- **Production status:** internal debug only. No release signing, no AAB, no ads/billing, no privacy policy yet. See "Production readiness (open)".
+- **Status (2026-11-03):** debug build installed and clean-launching on a Realme RMX3381 (ColorOS, Android 13 / SDK 33). Engine runs end-to-end (Python → SSL → yt-dlp 2026.10.26). Since the last doc: free/Pro gating is implemented (`lib/entitlements.dart` — trial clock, 25 audios / 2 playlists, Smart 3–6, custom-range paywall, 3-day and 1-day trial reminders, debug tier switches) and RevenueCat billing is wired (`lib/billing.dart` + paywall/Settings). **Not built since these changes; no device test yet.**
+- **Production status:** internal debug only. No release signing, no AAB, no ads, no Play Console products, no privacy policy yet. See "Production readiness (open)".
 
 ## Tech Stack
 - **Flutter** 3.47.8 (`C:\src\flutter\bin`), Material 3, Dart `^3.9.0`.
 - **Android:** `minSdk 24`, `targetSdk = flutter.targetSdkVersion` (36), SDK 36 at `E:\Android\Sdk`, NDK 28.2.13676358, JDK from Android Studio.
-- **Deps (pubspec.yaml):** `just_audio` ^0.10, `just_audio_background` beta.17 (→ `audio_service` 0.18.19), `audio_session`, `receive_intent`, `reorderable_grid_view` 2.2.8, `path_provider`, `shared_preferences`, `url_launcher`, `file_picker` 13.x (**nonstandard fork**: `pickFiles` returns `List<PlatformFile>`, `getDirectoryPath()`), `cupertino_icons`.
+- **Deps (pubspec.yaml):** `just_audio` ^0.10, `just_audio_background` beta.17 (→ `audio_service` 0.18.19), `audio_session`, `receive_intent`, `reorderable_grid_view` 2.2.8, `path_provider`, `shared_preferences`, `url_launcher`, `file_picker` 13.x (**nonstandard fork**: `pickFiles` returns `List<PlatformFile>`, `getDirectoryPath()`), `purchases_flutter` 11.0.0 (RevenueCat → Play Billing 9.1.0; needs Kotlin ≥ 2.1 and compileSdk ≥ 35 — both already true), `cupertino_icons`.
+- **Not yet added:** `google_mobile_ads` (planned, see `docs/ads.md`).
 - **Removed:** `ytdlp_flutter` / `youtubedl-android` (GPL-3.0, ffmpeg payload, runtime yt-dlp updates). Nothing GPL ships now except `libcrypt` (LGPL-2.1, unmodified, separate `.so`).
 - **Device:** adb `E:\Android\Sdk\platform-tools\adb.exe`, serial `PBFIINYP7LGE4PPV`, pattern lock — user unlocks and tests manually; `svc power stayon true` set.
 - **No storage permissions at all.** All media and folder access goes through SAF (`content://` URIs).
@@ -71,6 +72,10 @@ None. `AppStore.I.fullPro` is hard-coded `true`; free/Pro gating contract in `pl
 - **Sort & filter sheet**, **Guide sheet**, **Folder create sheet**, **Delete confirm sheet** (with "Don't ask again").
 
 ## Components / Lib (per file)
+### lib/entitlements.dart
+- `Entitlements.I` (`ChangeNotifier`) — the single source of truth for the plan. Trial clock (`trialStartMs`, 7 days, starts at first folder link, adopted from the folder mirror after a reinstall), `purchased` (store entitlement + expiry + 3-day offline grace), `billingTrial`, `willRenew`, `subscriptionEndsAt`, `debugPro`, derived `isPro`, `capped`, `showAds`, `maxTracks` (25), `maxPlaylists` (2), `canUseCustomRange`, Smart `smartMin/Max` (3–6), `importBlockReason`, `dueTrialReminder` (3 / 1 days, once each), `setStoreEntitlement(...)` (written only by `lib/billing.dart`), `statusLabel`, and debug tier controls.
+### lib/billing.dart
+- RevenueCat wrapper. `init()` (no-op without `RC_ANDROID_KEY`), `refresh()`, `loadOfferings()`, `planView(plan)` / `annualSaving` (prices come from Play, never constants), `packageFor(plan)` (dashboard slot → package type → product id), `purchase`, `purchasePlan`, `restore`, `_mapError` (Play error code → one sentence), `_apply(CustomerInfo)` → `Entitlements.setStoreEntitlement`. `PurchaseReport{success,cancelled,pending,unavailable,failed}`.
 ### lib/models.dart
 - `Track {id,title,source,path,fileName,durationMs,folderIds,addedAtMs}` + JSON; `Folder {id,name,emoji}`.
 - Enums: `AppThemeMode`, `ViewMode`, `RtLoop{smart,customRange,infinite}`, `SortBy`, `DateFilter`.
@@ -96,18 +101,18 @@ None. `AppStore.I.fullPro` is hard-coded `true`; free/Pro gating contract in `pl
 ### lib/library.dart
 - Home screen, chip strip, playlist header/collapse, sort+filter sheet, guide bar, idle FAB, rearrange modes, track/playlist menus, `removeTrackFromLibrary`, `deleteTrackWithConfirm`, MiniBar, SAF import (`_pickMedia`, `importMediaFiles`, `importMediaFolder`, `importAudioFile`).
 ### lib/sheets.dart
-- `AddReelSheet`, `PlayerSheet`, range picker (bottom sheet), playlist sheets/menus, guide sheet (`_GuideStep` ×7), emoji picker, `showInputSheet`.
+- `AddReelSheet`, `PlayerSheet`, range picker (bottom sheet), playlist sheets/menus, guide sheet (`_GuideStep` ×7), emoji picker, `showInputSheet`, `showPaywallSheet` (stateless shell + `_PaywallSheetState`: live Play prices, yearly/monthly cards, purchase/restore/manage, `_PlanCard`), `showTrialReminderSheet`.
 ### lib/main.dart
-- `main()` (instant `runApp`, error reporting, deferred audio-service warm-up), `RootScreen` (splash, `LibrarySync`, first-run sheet, share intents, lifecycle re-scan), `FirstRunSheet`, `CoinLoader`.
+- `main()` (instant `runApp`, error reporting, deferred audio-service warm-up), `RootScreen` (splash, `LibrarySync`, `Billing.init()` after the library is up, first-run sheet, share intents, lifecycle re-scan + `Billing.refresh()`), `FirstRunSheet`, `CoinLoader`.
 ### lib/settings_screen.dart
-- Guide card, appearance radios, storage block (link folder / re-scan / uninstall copy), playback switches, feedback mailto, Pro card.
+- Guide card, appearance radios, storage block (link folder / re-scan / uninstall copy), playback switches, feedback mailto, live Pro card (`ListenableBuilder` on `Entitlements`), "Restore purchases" row, debug tier section.
 ### lib/error_report.dart
 - `rootMessengerKey`, `reportError` (debugPrint + microtask-deferred single toast), `installErrorReporting`.
 ### Android
 - **MainActivity : AudioServiceActivity** — engine bridge, folder bridge, SAF media picker channel (`/media`), recents-swipe notification cleanup by class name, back-press flag.
 - **FolderBridge.kt** — SAF tree link/unlink, scan (recursive, depth 4), save (copy from cache), text read/write, delete, open.
 - **EngineBridge.kt** — CPython launcher described above.
-- **Manifest** — INTERNET, FOREGROUND_SERVICE(+MEDIA_PLAYBACK), WAKE_LOCK; AudioService + MediaButtonReceiver; SEND share target; `singleTask`; label ReelTunes; mailto query.
+- **Manifest** — INTERNET, FOREGROUND_SERVICE(+MEDIA_PLAYBACK), WAKE_LOCK, **`com.android.vending.BILLING`**; AudioService + MediaButtonReceiver; SEND share target; `singleTask`; label ReelTunes; mailto query.
 - **build.gradle.kts** — `applicationId com.buildwithanshul.reeltunes`, `minSdk 24`, `useLegacyPackaging = true`, `doNotStrip "**/*.zip.so"`, release still signed with the debug key.
 - **packages/just_audio_background** — vendored fork of `0.0.1-beta.17` (latest upstream), wired via `dependency_overrides`. Two patches, both marked `ReelTunes patch`: (1) `getRelativeIndex` no longer returns the current index under `repeatMode == one`, so the media session's next/previous skip the queue instead of restarting the track; (2) `onTaskRemoved()` now calls `stop()`, so swiping the app from Recents clears the media notification. `example/` deleted so analysis stays clean. Re-check both when upgrading just_audio.
 
@@ -163,20 +168,24 @@ $adb = "E:\Android\Sdk\platform-tools\adb.exe"
 - **Platform repeat-one for looping** rather than Dart timers (works backgrounded/screen-off).
 - **Smart learns from Custom** — rolling 12-entry history of completed custom-range sessions.
 - **Infinite loop only via the repeat icon.**
-- **Free/Pro is specified in `docs/free-vs-pro.md`, codes/dashboard in `docs/promo-codes.md`.** 7-day trial = Pro with no ads; day 8 = caps (25 audios / 2 playlists), ads, coin shop. Caps never hide existing tracks.
 - **Vendored dependency over a refactor** — the two `just_audio_background` bugs were fixed in a local fork rather than replacing the media-session layer with a custom `audio_service` handler, to avoid destabilising playback right before release.
-- Parked: custom notification handler, sleep timer/EQ/crossfade, ads + Play Billing, in-app licences screen.
+- **Free/Pro is specified in `docs/free-vs-pro.md`, ads in `docs/ads.md`, codes/dashboard in `docs/promo-codes.md`.** 7-day trial = Pro with no ads; day 8 = caps (25 audios / 2 playlists), ads, coin shop. Caps never hide existing tracks.
+- **RevenueCat over a hand-rolled purchase server** — it verifies receipts with the Play Developer API for free at this scale, restores per Google account, and keeps the app from inventing its own Pro flag. The raw Worker + Ed25519 design stays in the doc as the fallback if RevenueCat ever becomes a cost or a dependency problem.
+- **Play owns the prices.** The paywall renders `storeProduct.priceString` from Play and falls back to the static list only when the store is unreachable; no price is ever hard-coded as the charged amount.
+- **Download ad after the save, not before** — an ad before a slow extraction gets blamed for the wait, and an ad before a failed extraction is a scam. Plus a 60 s floor so a burst of saves shows one ad, not three.
+- **Ads live outside the playback path** — sticky banner above the mini bar, end-of-list card, post-save interstitial. Nothing over the player or the seek bar, ever.
+- Parked: custom notification handler, sleep timer/EQ/crossfade, ads SDK, in-app licences screen.
 
 ## Production readiness (open)
 - Release signing (debug key today), upload keystore / Play App Signing, AAB.
-- Ads: AdMob + UMP consent for EEA/UK; free-tier limits; ads must be reflected in the privacy policy and Data Safety.
+- **Play Console: create `reeltunes_pro_monthly` / `reeltunes_pro_annual` (7-day free trial offer), then RevenueCat dashboard: entitlement `pro`, offering `default`, packages `$rc_monthly` / `$rc_annual`, Play service-account JSON. Build with `--dart-define RC_ANDROID_KEY=goog_…`.** Until both exist, the paywall says "Pro isn't live yet".
+- Ads: AdMob + UMP consent for EEA/UK (plan + slot rules in `docs/ads.md`); ads must be reflected in the privacy policy and Data Safety.
 - Content-rights consent sheet + Settings toggle; link validation (`https` only, host allowlist, length cap).
 - Generic branding in listing/screenshots (no platform names or logos); in-app licences screen (LICENSES/ already shipped in repo).
 - `allowBackup=false` + `dataExtractionRules` (or a deliberate backup story) — audit before release.
 - Privacy policy, Data Safety answers, store listing assets.
-- Free/Pro gating still hard-coded `true`; any paid tier must use Play Billing. Plan + prices are in `docs/free-vs-pro.md`.
 - Extraction IP/ToS exposure and Play's stance on bundled interpreters remain the headline risk.
-- 16 KB page-size support for the bundled `libpython*.so` / `libqjs.so` not verified.
+- 16 KB page-size support for the bundled `libpython*.so` / `libqjs.so` not verified — **the RevenueCat/Billing SDK now adds its own `.so`-free code, so this remains an engine-only question**.
 - Public GPL repo `UnfilteredAnshul/reeltunes-gpl-sources` still undeleted (delete after the GPL-free build is verified on device).
 
 ## File Tree
@@ -192,7 +201,10 @@ E:\Projects\ReelTune\
 ├─ lib/
 │  ├─ main.dart · library.dart · sheets.dart · player.dart
 │  ├─ models.dart · extractor.dart · engine.dart · library_sync.dart · folder_access.dart
+│  ├─ entitlements.dart                       # trial / free caps / Pro (single source of truth)
+│  ├─ billing.dart                            # RevenueCat: configure, offerings, purchase, restore
 │  ├─ extraction_errors.dart · top_toast.dart · settings_screen.dart · emoji.dart · error_report.dart
+├─ docs/free-vs-pro.md · docs/ads.md · docs/promo-codes.md
 ├─ tools/repack_engine.py                    # reproducible GPL strip of libpython.zip.so
 ├─ LICENSES/                                 # PSF-2.0, Apache-2.0, LGPL-2.1, Unlicense, QuickJS-MIT
 ├─ THIRD_PARTY_NOTICES.md                    # licence table + yt-dlp version

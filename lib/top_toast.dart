@@ -14,7 +14,10 @@ Timer? _timer;
 
 /// Shows [message] at the top of the screen for a couple of seconds.
 /// Calling it again replaces the previous toast instead of stacking.
-void showTopToast(BuildContext context, String message) {
+///
+/// [error] only changes the icon and tint: the sentence itself is always the
+/// generic one the user should see (exact reasons go to logcat).
+void showTopToast(BuildContext context, String message, {bool error = false}) {
   final overlay = Overlay.maybeOf(context, rootOverlay: true);
   if (overlay == null) return;
 
@@ -26,6 +29,7 @@ void showTopToast(BuildContext context, String message) {
   entry = OverlayEntry(
     builder: (_) => _TopToast(
       message: message,
+      error: error,
       onDone: () {
         if (_active == entry) {
           _active = null;
@@ -40,8 +44,13 @@ void showTopToast(BuildContext context, String message) {
 
 class _TopToast extends StatefulWidget {
   final String message;
+  final bool error;
   final VoidCallback onDone;
-  const _TopToast({required this.message, required this.onDone});
+  const _TopToast({
+    required this.message,
+    required this.onDone,
+    this.error = false,
+  });
 
   @override
   State<_TopToast> createState() => _TopToastState();
@@ -78,6 +87,8 @@ class _TopToastState extends State<_TopToast>
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final bg = widget.error ? scheme.errorContainer : scheme.inverseSurface;
+    final fg = widget.error ? scheme.onErrorContainer : scheme.onInverseSurface;
     return Positioned(
       top: 0,
       left: 0,
@@ -102,7 +113,7 @@ class _TopToastState extends State<_TopToast>
                     padding:
                         const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                     decoration: BoxDecoration(
-                      color: scheme.inverseSurface,
+                      color: bg,
                       borderRadius: BorderRadius.circular(14),
                       boxShadow: const [
                         BoxShadow(
@@ -113,16 +124,17 @@ class _TopToastState extends State<_TopToast>
                       ],
                     ),
                     child: Row(children: [
-                      Icon(Icons.info_outline,
-                          size: 18, color: scheme.onInverseSurface),
+                      Icon(
+                          widget.error
+                              ? Icons.error_outline
+                              : Icons.info_outline,
+                          size: 18,
+                          color: fg),
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(
                           widget.message,
-                          style: TextStyle(
-                            color: scheme.onInverseSurface,
-                            fontSize: 14,
-                          ),
+                          style: TextStyle(color: fg, fontSize: 14),
                         ),
                       ),
                     ]),

@@ -15,6 +15,7 @@ import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:just_audio_background/just_audio_background.dart';
 
+import 'entitlements.dart';
 import 'error_report.dart';
 import 'models.dart';
 
@@ -259,11 +260,15 @@ class RtPlayer extends ChangeNotifier {
   ///   it uses the same range. Short reels (<30 s) get one extra pass.
   int _loopsTarget() {
     final store = AppStore.I;
-    if (loop == RtLoop.customRange) {
+    // Custom range is Pro-only. A lapsed subscription falls back to Smart
+    // instead of keeping a range the user can no longer edit.
+    if (loop == RtLoop.customRange && Entitlements.I.canUseCustomRange) {
       return randomLoopCount(store.rangeMin, store.rangeMax);
     }
     final learned = store.learnedLoopCount();
-    var target = learned ?? randomLoopCount(store.rangeMin, store.rangeMax);
+    // Free Smart is 3-6 (docs/free-vs-pro.md); Pro learns from history.
+    var target = learned ??
+        randomLoopCount(Entitlements.smartMin, Entitlements.smartMax);
     final secs = _durationSecondsHint();
     if (secs > 0 && secs < 30) target += 1;
     return target.clamp(1, 99);

@@ -11,6 +11,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'entitlements.dart';
 import 'folder_access.dart';
 import 'models.dart';
 
@@ -25,6 +26,9 @@ class LibrarySync {
     _applyToStore();
     AppStore.I.onLibrarySaved = () async => _scheduleMirror();
     await restoreIfEmpty();
+    // A mirror carries an older trial start; only start a fresh clock when
+    // there was none (first install).
+    if (folder.linked) await Entitlements.I.startTrialIfNeeded();
     await sync();
   }
 
@@ -42,6 +46,7 @@ class LibrarySync {
     folder = picked;
     _applyToStore();
     await restoreIfEmpty();
+    await Entitlements.I.startTrialIfNeeded();
     await sync();
     await mirror();
     return picked;
@@ -68,15 +73,20 @@ class LibrarySync {
   static Future<int> sync() async {
     if (!folder.linked) return 0;
     final files = await FolderAccess.scan();
-    if (files.isEmpty) return 0;
+    if (files.isEmpty) {
+      AppStore.I.setFolderOverflow(0);
+      return 0;
+    }
 
     final store = AppStore.I;
+    final entitlements = Entitlements.I;
     final byName = <String, Track>{
       for (final t in store.tracks)
         if (t.fileName.isNotEmpty) t.fileName: t,
     };
     final scanned = <String>{};
     var added = 0;
+    var blocked = 0;
     var changed = false;
 
     for (final f in files) {
@@ -101,6 +111,12 @@ class LibrarySync {
         legacy.path = f.uri;
         byName[f.name] = legacy;
         changed = true;
+        continue;
+      }
+      // Free tier: the folder may hold more files than the library allows.
+      // Extra files are counted, never imported, never touched on disk.
+      if (store.tracks.length >= entitlements.maxTracks) {
+        blocked++;
         continue;
       }
       final playlist = _playlistIdFor(f.relative);
@@ -129,6 +145,7 @@ class LibrarySync {
           !scanned.contains(t.fileName));
     }
     final removed = before - store.tracks.length;
+    store.setFolderOverflow(blocked);
 
     if (added > 0 || removed > 0 || changed) {
       await store.save();
@@ -161,6 +178,9 @@ class LibrarySync {
     final prefix = folder.uri ?? '';
     final payload = {
       'v': 1,
+      // Survives uninstall with the folder, so a reinstall cannot restart the
+      // 7-day trial (docs/free-vs-pro.md §7).
+      'trialStartMs': Entitlements.I.trialStartedAt?.millisecondsSinceEpoch,
       'folders': [for (final f in store.folders) f.toMap()],
       'tracks': [
         for (final t in store.tracks)
@@ -193,6 +213,11 @@ class LibrarySync {
       return false;
     }
 
+    // The folder remembers when the trial started; adopt it before importing
+    // anything so caps are applied with the right plan.
+    await Entitlements.I.adoptTrialStart((data['trialStartMs'] as num?)?.toInt());
+    var blocked = 0;
+
     for (final m in (data['folders'] as List? ?? const [])) {
       if (m is! Map) continue;
       final id = m['id']?.toString() ?? '';
@@ -211,6 +236,10 @@ class LibrarySync {
       final name = m['name']?.toString() ?? '';
       final file = byName[name];
       if (file == null) continue;
+      if (store.tracks.length >= Entitlements.I.maxTracks) {
+        blocked++;
+        continue;
+      }
       store.tracks.add(Track(
         id: 't${DateTime.now().microsecondsSinceEpoch}${store.tracks.length}',
         title: m['title']?.toString() ?? _titleOf(name),
@@ -223,6 +252,7 @@ class LibrarySync {
       ));
     }
     await store.save();
+    store.setFolderOverflow(blocked);
     store.refresh();
     return store.tracks.isNotEmpty;
   }

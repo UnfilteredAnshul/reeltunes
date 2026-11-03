@@ -3,9 +3,11 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:receive_intent/receive_intent.dart' as ri;
 
+import 'billing.dart';
+import 'entitlements.dart';
+import 'error_report.dart';
 import 'library.dart';
 import 'library_sync.dart';
-import 'error_report.dart';
 import 'models.dart';
 import 'player.dart';
 import 'sheets.dart';
@@ -80,6 +82,7 @@ class _RootScreenState extends State<RootScreen>
       const minSplash = Duration(milliseconds: 1400);
       await Future.wait([
         AppStore.I.init(),
+        Entitlements.I.init(),
         Future.delayed(minSplash), // coin must be visible, even briefly
       ]);
       // Load the audios folder grant, restore a mirror after a reinstall and
@@ -98,7 +101,27 @@ class _RootScreenState extends State<RootScreen>
         );
       }
       if (mounted) setState(() => ready = true);
+      // The store check runs after the library is on screen: a slow Play
+      // connection must never hold up the splash. It corrects the plan (and
+      // therefore the caps and ads) as soon as it answers.
+      _syncStore();
+      // 3-day / 1-day nudge, once each. Never stacked on the first-run sheet.
+      if (AppStore.I.audiosLinked) _maybeTrialReminder();
     });
+  }
+
+  /// Configures RevenueCat once, then refreshes the entitlement. Safe no-op
+  /// when the build has no store key. Everything gated reads `Entitlements`,
+  /// which is a `ChangeNotifier`, so the UI corrects itself.
+  Future<void> _syncStore() => Billing.I.init();
+
+  /// Shows the trial-ending sheet when one is due and marks it as seen.
+  Future<void> _maybeTrialReminder() async {
+    final due = Entitlements.I.dueTrialReminder;
+    if (due == null || !mounted) return;
+    await Entitlements.I.markReminderShown(due);
+    if (!mounted) return;
+    await showTrialReminderSheet(context, due);
   }
 
   @override
@@ -106,7 +129,13 @@ class _RootScreenState extends State<RootScreen>
     // Coming back from the file manager / another app: files may have been
     // added to the audios folder, so re-scan before the user looks.
     if (state == AppLifecycleState.resumed && ready) {
-      LibrarySync.refreshState().then((_) => LibrarySync.sync());
+      // Coming back from Play: the purchase may have completed off-app, or a
+      // subscription may have lapsed since the last launch.
+      Billing.I.refresh();
+      LibrarySync.refreshState().then((_) async {
+        await LibrarySync.sync();
+        await _maybeTrialReminder();
+      });
     }
   }
 

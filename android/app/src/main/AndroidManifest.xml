@@ -5,6 +5,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <!-- Play Billing, via RevenueCat (purchases_flutter). Declared here as well
+         as in the plugin AAR so the merged manifest always has it. -->
+    <uses-permission android:name="com.android.vending.BILLING"/>
     <application
         android:label="ReelTunes"
         android:name="${applicationName}"

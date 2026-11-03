@@ -19,6 +19,9 @@ dependencies:
   receive_intent: ^0.2.8
   audio_session: ^0.2.4
   reorderable_grid_view: ^2.2.8
+  # Subscriptions. RevenueCat wraps Play Billing and keeps the entitlement
+  # state in one place; the SDK key is injected at build time (see lib/billing.dart).
+  purchases_flutter: ^11.0.0
 
 dev_dependencies:
   flutter_test:

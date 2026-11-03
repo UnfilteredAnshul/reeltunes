@@ -2,10 +2,13 @@
 
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'billing.dart';
 import 'emoji.dart';
+import 'entitlements.dart';
 import 'extraction_errors.dart';
 import 'extractor.dart';
 import 'library.dart';
@@ -170,6 +173,12 @@ class _AddReelSheetState extends State<AddReelSheet> {
       showTopToast(context, 'Link your audios folder first (Settings).');
       return;
     }
+    // Check the cap before the engine runs: never download a file the library
+    // is not allowed to list.
+    if (Entitlements.I.importBlockReason(AppStore.I.tracks.length) != null) {
+      showPaywallSheet(context, reason: 'Free tier holds 25 audios');
+      return;
+    }
     setState(() {
       state = _ExtractionState.running;
       status = 'Preparing engine…';
@@ -280,6 +289,12 @@ class _AddReelSheetState extends State<AddReelSheet> {
 /// showing only the scrim on the ColorOS device, sheets render reliably.
 /// Returns the completion future so a stacked sheet can await it.
 Future<void> showFolderCreate(BuildContext context) {
+  // Free tier tops out at 2 playlists; the 3rd opens the paywall instead of a
+  // dead "create" sheet. Restoring a lapsed account never deletes playlists.
+  if (!Entitlements.I.canAddPlaylist(AppStore.I.folders.length)) {
+    showPaywallSheet(context, reason: 'Free holds 2 playlists');
+    return Future.value();
+  }
   return showModalBottomSheet(
     context: context,
     showDragHandle: true,
@@ -906,9 +921,17 @@ class _PlayerSheetState extends State<PlayerSheet> {
                     const SizedBox(width: 4),
                     _LoopChip(
                       label:
-                          'Custom range (${AppStore.I.rangeMin}-${AppStore.I.rangeMax}x)',
+                          'Custom range (${AppStore.I.rangeMin}-${AppStore.I.rangeMax}x)'
+                          '${Entitlements.I.canUseCustomRange ? '' : ' · Pro'}',
                       selected: player.loop == RtLoop.customRange,
-                      onTap: _openRangePicker,
+                      onTap: () {
+                        if (!Entitlements.I.canUseCustomRange) {
+                          showPaywallSheet(context,
+                              reason: 'Custom loop range is Pro');
+                          return;
+                        }
+                        _openRangePicker();
+                      },
                     ),
 
                   ],
@@ -1094,4 +1117,424 @@ class _RangeStepper extends StatelessWidget {
       IconButton(onPressed: () => _bump(1), icon: const Icon(Icons.add)),
     ]);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Free vs Pro: paywall + trial-ending reminders
+// ---------------------------------------------------------------------------
+
+/// The one paywall in the app. [reason] explains what the user just hit, so the
+/// sheet never appears as an unprovoked ad.
+Future<void> showPaywallSheet(BuildContext context, {String? reason}) {
+  return showModalBottomSheet(
+    context: context,
+    showDragHandle: true,
+    isScrollControlled: true,
+    useSafeArea: true,
+    builder: (sheetCtx) => _PaywallSheet(reason: reason),
+  );
+}
+
+class _PaywallSheet extends StatefulWidget {
+  final String? reason;
+  const _PaywallSheet({this.reason});
+
+  @override
+  State<_PaywallSheet> createState() => _PaywallSheetState();
+}
+
+class _PaywallSheetState extends State<_PaywallSheet> {
+  /// `annual` by default: it is the better deal for the user and the better
+  /// revenue for us, and both prices are on screen either way.
+  String plan = 'annual';
+  bool loading = true;
+  bool busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    if (!Billing.I.configured) {
+      // No store key in this build (sideload / dev). The sheet still works so
+      // the whole flow is testable; release builds with a key never get here.
+      if (mounted) setState(() => loading = false);
+      return;
+    }
+    await Billing.I.loadOfferings();
+    if (!mounted) return;
+    setState(() => loading = false);
+  }
+
+  String _priceFor(String which) =>
+      Billing.I.planView(which)?.priceString ??
+      (which == 'annual' ? '₹3000 / year' : '₹399 / month');
+
+  Future<void> _buy() async {
+    if (busy) return;
+    final e = Entitlements.I;
+
+    // Already Pro: nothing to buy, just close.
+    if (e.isPro) {
+      Navigator.pop(context);
+      return;
+    }
+
+    setState(() => busy = true);
+    try {
+      final available = Billing.I.planView(plan) != null;
+      if (!Billing.I.configured || !available) {
+        if (kDebugMode) {
+          await Entitlements.I.setPurchased(true);
+          if (!mounted) return;
+          Navigator.pop(context);
+          if (context.mounted) {
+            showTopToast(context, 'Pro unlocked (debug build)');
+          }
+        } else if (context.mounted) {
+          showTopToast(context, 'Pro isn\'t live yet — coming soon.', error: true);
+        }
+        return;
+      }
+
+      final report = await Billing.I.purchasePlan(plan);
+      if (!mounted) return;
+      if (report.ok) {
+        Navigator.pop(context);
+        if (context.mounted) showTopToast(context, 'Welcome to Pro · no ads');
+      } else if (report.outcome == PurchaseOutcome.pending) {
+        Navigator.pop(context);
+        if (context.mounted) showTopToast(context, report.message ?? 'Pending');
+      } else if (!report.quiet) {
+        if (context.mounted) {
+          showTopToast(context, report.message ?? 'Purchase failed', error: true);
+        }
+      }
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<void> _restore() async {
+    if (busy) return;
+    setState(() => busy = true);
+    try {
+      final report = await Billing.I.restore();
+      if (!mounted) return;
+      if (report.ok) {
+        Navigator.pop(context);
+        if (context.mounted) showTopToast(context, 'Pro restored');
+      } else if (context.mounted) {
+        showTopToast(context, report.message ?? 'Nothing to restore',
+            error: report.outcome != PurchaseOutcome.unavailable);
+      }
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<void> _manage() async {
+    await launchUrl(Uri.parse(Billing.manageUrl),
+        mode: LaunchMode.externalApplication);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    final e = Entitlements.I;
+    final alreadyPro = e.isPro;
+
+    return SingleChildScrollView(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(alreadyPro ? 'ReelTunes Pro' : 'Go Pro',
+                style: text.titleLarge?.copyWith(fontWeight: FontWeight.w600)),
+            if (widget.reason != null) ...[
+              const SizedBox(height: 4),
+              Text(widget.reason!,
+                  style: text.bodyMedium
+                      ?.copyWith(color: scheme.onSurfaceVariant)),
+            ],
+            const SizedBox(height: 14),
+            for (final line in const [
+              'Unlimited audios and playlists',
+              'No ads, ever',
+              'Custom loop range',
+              'Smart looping that learns your counts',
+            ])
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 3),
+                child: Row(children: [
+                  Icon(Icons.check_circle, size: 18, color: scheme.primary),
+                  const SizedBox(width: 10),
+                  Expanded(child: Text(line)),
+                ]),
+              ),
+            const SizedBox(height: 14),
+            if (alreadyPro)
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: scheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(children: [
+                  Text(e.statusLabel,
+                      style: text.titleSmall
+                          ?.copyWith(fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 4),
+                  Text(
+                    e.willRenew
+                        ? 'Renews automatically through Google Play.'
+                        : 'No renewal scheduled. Pro stays until the date above.',
+                    textAlign: TextAlign.center,
+                    style: text.bodySmall
+                        ?.copyWith(color: scheme.onSurfaceVariant),
+                  ),
+                ]),
+              )
+            else ...[
+              _PlanCard(
+                title: 'Yearly',
+                price: _priceFor('annual'),
+                // Play's own per-month number, so the comparison is honest.
+                subtitle: Billing.I.annualSaving ??
+                    Billing.I.planView('annual')?.perMonthString,
+                badge: 'Best value',
+                selected: plan == 'annual',
+                onTap: () => setState(() => plan = 'annual'),
+              ),
+              const SizedBox(height: 8),
+              _PlanCard(
+                title: 'Monthly',
+                price: _priceFor('monthly'),
+                subtitle: 'Cancel anytime',
+                selected: plan == 'monthly',
+                onTap: () => setState(() => plan = 'monthly'),
+              ),
+              if (loading)
+                const Padding(
+                  padding: EdgeInsets.only(top: 10),
+                  child: LinearProgressIndicator(minHeight: 2),
+                ),
+              if (Billing.I.configured &&
+                  !loading &&
+                  Billing.I.planView('monthly') == null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    Billing.I.lastError ??
+                        'Prices are still being set up. Try again shortly.',
+                    style: text.bodySmall
+                        ?.copyWith(color: scheme.onSurfaceVariant),
+                  ),
+                ),
+              const SizedBox(height: 12),
+              Text(
+                Billing.I.hasIntroTrial
+                    ? '7 days free, then the price above. Cancel anytime in '
+                        'Google Play — you keep Pro until the period ends.\n'
+                        'Prices shown by Google Play for your country.'
+                    : 'Billed through Google Play. Cancel anytime in Google '
+                        'Play — you keep Pro until the period ends.\n'
+                        'Prices shown by Google Play for your country.',
+                textAlign: TextAlign.center,
+                style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+              ),
+            ],
+            const SizedBox(height: 14),
+            if (alreadyPro)
+              FilledButton(
+                onPressed: _manage,
+                child: const Text('Manage subscription'),
+              )
+            else
+              FilledButton(
+                onPressed: busy ? null : _buy,
+                child: busy
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Continue'),
+              ),
+            if (!alreadyPro && Billing.I.configured)
+              TextButton(
+                onPressed: busy ? null : _restore,
+                child: const Text('Restore purchases'),
+              ),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text(alreadyPro ? 'Done' : 'Not now'),
+            ),
+            Text(
+              'Current: ${e.statusLabel}',
+              textAlign: TextAlign.center,
+              style: text.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One selectable price row. Prices come from Play, never from a constant, so
+/// the sheet always matches what the purchase dialog will charge.
+class _PlanCard extends StatelessWidget {
+  final String title;
+  final String price;
+  final String? subtitle;
+  final String? badge;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _PlanCard({
+    required this.title,
+    required this.price,
+    required this.selected,
+    required this.onTap,
+    this.subtitle,
+    this.badge,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    return Material(
+      color: selected ? scheme.primaryContainer : scheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: selected ? scheme.primary : Colors.transparent,
+              width: 1.5,
+            ),
+          ),
+          child: Row(children: [
+            Icon(
+              selected
+                  ? Icons.radio_button_checked
+                  : Icons.radio_button_unchecked,
+              size: 20,
+              color: selected ? scheme.primary : scheme.onSurfaceVariant,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [
+                    Text(title,
+                        style: text.titleSmall
+                            ?.copyWith(fontWeight: FontWeight.w600)),
+                    if (badge != null) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: scheme.primary,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(badge!,
+                            style: text.labelSmall?.copyWith(
+                                color: scheme.onPrimary,
+                                fontWeight: FontWeight.w600)),
+                      ),
+                    ],
+                  ]),
+                  if (subtitle != null)
+                    Text(subtitle!,
+                        style: text.bodySmall
+                            ?.copyWith(color: scheme.onSurfaceVariant)),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(price,
+                style: text.titleSmall?.copyWith(fontWeight: FontWeight.w600)),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// Shown on launch/resume when the trial has 3 days and 1 day left. Each fires
+/// once — [Entitlements.dueTrialReminder] owns that bookkeeping.
+Future<void> showTrialReminderSheet(BuildContext context, int daysLeft) {
+  return showModalBottomSheet(
+    context: context,
+    showDragHandle: true,
+    isScrollControlled: true,
+    useSafeArea: true,
+    builder: (sheetCtx) {
+      final scheme = Theme.of(sheetCtx).colorScheme;
+      final ending = daysLeft <= 1;
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(children: [
+              Icon(Icons.hourglass_bottom, color: scheme.primary),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                    ending
+                        ? 'Your trial ends tomorrow'
+                        : 'Your trial ends in $daysLeft days',
+                    style: Theme.of(sheetCtx)
+                        .textTheme
+                        .titleLarge
+                        ?.copyWith(fontWeight: FontWeight.w600)),
+              ),
+            ]),
+            const SizedBox(height: 10),
+            Text(
+              ending
+                  ? 'After today the free version keeps 25 audios and 2 '
+                      'playlists, and ads start. Everything you already saved '
+                      'stays playable — nothing is deleted.'
+                  : 'When it ends, the free version keeps 25 audios and 2 '
+                      'playlists, and ads start. Your current library stays '
+                      'playable — nothing is deleted.',
+              style: Theme.of(sheetCtx).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 16),
+            FilledButton(
+              onPressed: () {
+                Navigator.pop(sheetCtx);
+                showPaywallSheet(context, reason: 'Keep everything, no ads');
+              },
+              child: const Text('Get Pro · no ads'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(sheetCtx);
+                Entitlements.I.markReminderShown(daysLeft);
+              },
+              child: const Text('Maybe later'),
+            ),
+          ],
+        ),
+      );
+    },
+  );
 }

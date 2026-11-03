@@ -1,7 +1,9 @@
-# ReelTunes — Free vs Pro (plan, not shipped)
+# ReelTunes — Free vs Pro
 
-> Status: **planning only**, nothing enforced yet. `AppStore.I.fullPro` is still
-> hard-coded `true`.
+> Status: **implemented** in `lib/entitlements.dart` (trial, caps, reminders) and
+> `lib/billing.dart` (RevenueCat over Play Billing). What is *not* live yet is the
+> Play Console product setup — until the subscription products exist there, a
+> release build shows "Pro isn't live yet".
 > Rule: **no restriction may ever touch the user's files.** Gating limits what
 > the app shows/creates, never what exists on the phone.
 
@@ -111,22 +113,84 @@ pay users to avoid paying you.
 
 ## 5. Ads (from day 8, deliberately gentle)
 
+Full plan, network comparison and eCPM reality: **`docs/ads.md`**. Summary:
+
 - **Nothing during the 7-day trial.** The trial is Pro — ads would undercut it.
-- **Banner:** library + settings **only**. Never in the player, never on the
-  "saved!" moment.
-- **Interstitial:** none in the first week of use. Later: max 1 per 4 saves,
-  ≥90 s apart, never while audio plays, never right after a failed extract.
+- **Slot A — download ad:** one interstitial **after** a successful save, max
+  one per download, ≥60 s apart, and never on the first download of an install.
+  An unfilled ad never blocks the save.
+- **Slot B — sticky bar:** anchored adaptive banner pinned **just above the mini
+  player**, on every browsing screen. Hidden in the full-screen player, in
+  sheets, and for Pro.
+- **Slot C — end of list:** a labelled "Sponsored" card after the last track
+  row. Never styled like a track.
 - **Rewarded:** only when the user taps "watch an ad for coins". Never auto-play.
+  Coins are credited by AdMob **SSV**, not by the client.
 - **UMP consent** (EEA/UK) before any personalized ad; non-personalized
-  fallback; ads disclosed in Data Safety.
-- Provider TBD — costs and formats get finalised once you pick (AdMob vs
-  alternatives). Numbers above are caps, not commitments.
+  fallback; an "Ad privacy settings" row in Settings; ads disclosed in Data
+  Safety.
+- Network: **AdMob** at launch (best India fill), mediation sources added later.
+  Numbers above are caps, not commitments.
 
 ## 6. How Pro is validated without app accounts
 
 **The Google account that buys the subscription *is* the account.** Play Billing
 already gives you a durable, Google-verified identity without signup, passwords,
 email capture or a user database.
+
+### 6.1 What is built: RevenueCat (`lib/billing.dart`)
+
+RevenueCat is the validation layer. It verifies every receipt with the Play
+Developer API on its own servers, maps products to one entitlement, restores on
+a new device, and hands the app a single `CustomerInfo`. That removes the need
+for our own purchase-verification server while keeping exactly the property we
+wanted: **the app never decides who is Pro from a local boolean it invented.**
+
+```
+Play purchase → RevenueCat (verifies receipt server-side)
+              → CustomerInfo.entitlements.active['pro']
+              → Entitlements.setStoreEntitlement(...)
+              → caps / ads / custom range flip on the same tick
+```
+
+| Piece | Value | Where it lives |
+|---|---|---|
+| SDK key | `goog_…` (public, safe in the APK) | `--dart-define RC_ANDROID_KEY=` |
+| Entitlement identifier | `pro` | RevenueCat dashboard + `--dart-define RC_ENTITLEMENT=` (default `pro`) |
+| Offering | `default` (marked *current*) | dashboard |
+| Packages | `$rc_monthly`, `$rc_annual` | dashboard |
+| Monthly product | `reeltunes_pro_monthly` | Play Console → Subscriptions |
+| Annual product | `reeltunes_pro_annual` | Play Console → Subscriptions |
+| Free trial | 7 days, one per Google account | Play Console → base plan → offer |
+
+Build with the key:
+
+```powershell
+flutter build appbundle --release --dart-define RC_ANDROID_KEY=goog_xxxxxxxxxxxx
+```
+
+Without the define the app has no store: the paywall falls back to a debug
+unlock in debug builds and a "coming soon" toast in release. Nothing crashes and
+no gate depends on the key being present.
+
+**Offline:** `Entitlements` caches the entitlement plus its expiry date. Pro
+survives 3 days past the reported expiry (`Entitlements.storeGrace`) so a phone
+that is offline at renewal does not drop to Free; a cancelled plan still reverts,
+just a few days later. Ads and caps never depend on the network.
+
+**Restore:** a Play purchase belongs to the Google account, so reinstall and
+new-phone both resolve with `Purchases.restorePurchases()` — the Settings row
+"Restore purchases", and the same button on the paywall.
+
+**Play trial vs app trial.** Both exist on purpose:
+- The **app trial** (7 days, starts at first folder link) is the freebie for
+  people who never open Play.
+- The **Play trial** (7 days on the subscription) is the one Google tracks per
+  Google account, so it cannot be reset by reinstalling. If it is running, the
+  app shows `Free trial · ends <date>` and behaves as Pro; the app trial's
+  reminders stay silent because `purchased` is true.
+
+### 6.2 The server option (only if RevenueCat is ever not enough)
 
 ```
 Play purchase → purchaseToken (opaque, per Google account + product)
@@ -165,9 +229,10 @@ Play purchase → purchaseToken (opaque, per Google account + product)
 - A determined modder still wins. Goal is "not worth 20 minutes", not DRM.
 - **No root detection**, no blocking screens — false positives, bad reviews.
 
-### If you want 100 % server-free
+### If RevenueCat is dropped later
 - `queryPurchasesAsync` client-side only: works, restores, trivially patchable.
-- Middle option: **RevenueCat** free tier (<$2.5k/mo revenue) does validation.
+- RevenueCat's free tier is <$2.5k/mo revenue — while the app is small it is the
+  cheapest correct answer, which is why it is the implemented one.
 
 ## 7. 7-day trial that survives a reinstall
 
@@ -215,23 +280,26 @@ Codes, creator programs and the admin dashboard are specified in
 - Never make playback depend on network.
 - Server constants (coin prices, daily cap) changeable without an app update.
 
-## 10. Build order (when approved)
-1. `Entitlements` service replacing `fullPro` (dev flag, no billing).
-2. **Trial clock** (Play trial + folder marker) → day 8 switches to caps.
-3. Free limits after trial: 25 audios / 2 playlists, Smart 3–6, custom-range
-   paywall.
-4. Ads: UMP + banner, then rewarded, then interstitial with caps.
-5. Coin ledger on the Worker + AdMob SSV → balances.
-6. Play Billing: products, trial, purchase/restore/acknowledge.
-7. Entitlement signing + Play Integrity + RTDN; 7-day grace.
-8. Coin shop (unlocks day 8) + paywall sheets.
-9. Codes + dashboard (`docs/promo-codes.md`).
-10. Store listing, Data Safety, privacy policy, release signing, AAB.
+## 10. Build order
 
-## 11. Decisions I still need
-1. **Server or no server** for Pro + coins + codes? (recommended: free Worker —
-   codes and referral quotas cannot work without one.)
-2. **Caps after the trial** — 25 audios / 2 playlists, or 50 / 3?
-3. **Rewarded ad daily cap** — 15 or 20 to start?
-4. **Interstitial at all**, or banner-only at launch?
-5. **Coin shop item list** — the four in §3, or trim?
+| # | Step | State |
+|---|---|---|
+| 1 | `Entitlements` replacing `fullPro` | **done** |
+| 2 | Trial clock (folder marker) → day 8 switches to caps | **done** |
+| 3 | Free limits: 25 audios / 2 playlists, Smart 3–6, custom-range paywall | **done** |
+| 4 | Trial-ending reminders at 3 days and 1 day | **done** |
+| 5 | RevenueCat + Play Billing: purchase, restore, entitlement → caps | **done in code**, awaiting Play Console products + dashboard |
+| 6 | Ads: UMP + sticky banner + interstitial with caps | next |
+| 7 | Coin ledger on the Worker + AdMob SSV → balances | |
+| 8 | Coin shop (unlocks day 8) | |
+| 9 | Codes + dashboard (`docs/promo-codes.md`) | |
+| 10 | Store listing, Data Safety, privacy policy, release signing, AAB | |
+
+## 11. Decisions still open
+1. **Ad network** — AdMob only, or AdMob + a mediation layer (see the ads plan).
+2. **Rewarded ad daily cap** — 15 or 20 to start?
+3. **Interstitial at all**, or banner-only at launch?
+4. **Coin shop item list** — the four in §3, or trim?
+5. **RevenueCat product IDs** — confirm `reeltunes_pro_monthly` /
+   `reeltunes_pro_annual` before they are created in Play Console (they are
+   permanent).

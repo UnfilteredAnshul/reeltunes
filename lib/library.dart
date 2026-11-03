@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:reorderable_grid_view/reorderable_grid_view.dart';
 
+import 'entitlements.dart';
 import 'folder_access.dart';
 import 'models.dart';
 import 'player.dart';
@@ -267,6 +268,45 @@ class _LibraryScreenState extends State<LibraryScreen> {
                   ]),
                 ),
               ),
+              if (store.folderOverflow > 0)
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  sliver: SliverToBoxAdapter(
+                    child: Material(
+                      color: Theme.of(context).colorScheme.secondaryContainer,
+                      borderRadius: BorderRadius.circular(12),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(12),
+                        onTap: () => showPaywallSheet(context,
+                            reason: 'Free tier holds 25 audios'),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 10),
+                          child: Row(children: [
+                            Icon(Icons.lock_outline,
+                                size: 18,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSecondaryContainer),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                '${store.folderOverflow} more '
+                                '${store.folderOverflow == 1 ? 'file' : 'files'}'
+                                ' in your folder · Pro to add',
+                                style: TextStyle(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSecondaryContainer),
+                              ),
+                            ),
+                            const Icon(Icons.chevron_right, size: 18),
+                          ]),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               if (store.visibleTracks.isEmpty)
                 const _EmptyLibrary()
               else
@@ -299,6 +339,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
   /// videos. Videos play their audio track directly — the file is never
   /// touched: not copied, not deleted, zero storage waste.
   Future<void> _openImportSheet() async {
+    if (Entitlements.I.importBlockReason(AppStore.I.tracks.length) != null) {
+      showPaywallSheet(context, reason: 'Free tier holds 25 audios');
+      return;
+    }
     final choice = await showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
@@ -1432,23 +1476,29 @@ Future<List<Track>> _pickMedia({required bool folder}) async {
   return picked;
 }
 
+/// Adds as many tracks as the current tier allows and returns that count.
+/// Callers surface the cap; nothing is ever imported past it silently.
+int _addWithinCap(List<Track> picked) {
+  var added = 0;
+  for (final t in picked) {
+    if (!Entitlements.I.canAddTracks(AppStore.I.tracks.length)) break;
+    AppStore.I.addTrack(t);
+    added++;
+  }
+  return added;
+}
+
 /// Pick audio/video files (one or many). Returns how many were imported.
 Future<int> importMediaFiles() async {
   final picked = await _pickMedia(folder: false);
-  for (final t in picked) {
-    AppStore.I.addTrack(t);
-  }
-  return picked.length;
+  return _addWithinCap(picked);
 }
 
 /// Pick a folder and import every audio/video inside it, recursively —
 /// DCIM-style folders keep their clips in sub-folders such as Camera/.
 Future<int> importMediaFolder() async {
   final picked = await _pickMedia(folder: true);
-  for (final t in picked) {
-    AppStore.I.addTrack(t);
-  }
-  return picked.length;
+  return _addWithinCap(picked);
 }
 
 Future<Track?> importAudioFile([BuildContext? context]) async {
@@ -1457,10 +1507,8 @@ Future<Track?> importAudioFile([BuildContext? context]) async {
   // "Or import an audio file instead".
   final picked = await _pickMedia(folder: false);
   if (picked.isEmpty) return null;
-  for (final t in picked) {
-    AppStore.I.addTrack(t);
-  }
-  return picked.first;
+  final added = _addWithinCap(picked);
+  return added == 0 ? null : picked.first;
 }
 
 String _trackId() => 't${DateTime.now().microsecondsSinceEpoch}';

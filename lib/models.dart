@@ -10,6 +10,8 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'entitlements.dart';
+
 enum AppThemeMode { system, light, dark }
 
 enum ViewMode { list, grid }
@@ -164,7 +166,17 @@ class AppStore extends ChangeNotifier {
   List<int> loopHistory = [];
   static const int maxLoopHistory = 12;
 
-  bool get fullPro => true; // full pro for now; restrictions come later
+  bool get fullPro => Entitlements.I.isPro;
+
+  /// Files the folder scan had to leave out because the free tier is full.
+  /// Drives the "N more files in your folder · Pro to add" row. Never a
+  /// deletion: the files stay on disk and in the file manager.
+  int folderOverflow = 0;
+  void setFolderOverflow(int n) {
+    if (folderOverflow == n) return;
+    folderOverflow = n;
+    notifyListeners();
+  }
 
   late SharedPreferences _prefs;
   File? _libFile;

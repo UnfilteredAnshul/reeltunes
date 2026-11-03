@@ -2,9 +2,12 @@
 // account/premium entry. Full pro unlocked while we build; gating later.
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'billing.dart';
+import 'entitlements.dart';
 import 'library_sync.dart';
 import 'models.dart';
 import 'sheets.dart';
@@ -118,12 +121,56 @@ class SettingsScreen extends StatelessWidget {
                 onTap: () => _sendFeedback(context),
               ),
               const _Section('Account'),
-              const ListTile(
-                title: Text('ReelTunes Pro'),
-                subtitle: Text('Everything unlocked while we build. '
-                    'Trial pricing later: \$2.99/mo · \$19.99/yr.'),
-                trailing: Icon(Icons.verified),
+              ListenableBuilder(
+                listenable: Entitlements.I,
+                builder: (context, _) {
+                  final e = Entitlements.I;
+                  return Column(children: [
+                    ListTile(
+                      leading: Icon(e.isPro
+                          ? Icons.verified
+                          : Icons.workspace_premium_outlined),
+                      title: const Text('ReelTunes Pro'),
+                      subtitle: Text(
+                        e.isPro
+                            ? '${e.statusLabel} · no ads, unlimited audios'
+                            : '${e.statusLabel} · then 25 audios, 2 playlists, ads',
+                      ),
+                      trailing: e.isPro
+                          ? null
+                          : FilledButton(
+                              onPressed: () =>
+                                  showPaywallSheet(context, reason: e.capped
+                                      ? 'Free tier limits'
+                                      : 'Keep everything after the trial'),
+                              child: const Text('Get Pro'),
+                            ),
+                      onTap: () => showPaywallSheet(context),
+                    ),
+                    // Only meaningful once the store is live and nothing is
+                    // active: reinstalls and new phones land here.
+                    if (!e.isPro && Billing.I.configured)
+                      ListTile(
+                        leading: const Icon(Icons.restore),
+                        title: const Text('Restore purchases'),
+                        subtitle: const Text(
+                            'Bring back Pro bought with this Google account'),
+                        onTap: () async {
+                          final report = await Billing.I.restore();
+                          if (!context.mounted) return;
+                          showTopToast(
+                            context,
+                            report.ok
+                                ? 'Pro restored'
+                                : report.message ?? 'Nothing to restore',
+                            error: !report.ok,
+                          );
+                        },
+                      ),
+                  ]);
+                },
               ),
+              if (kDebugMode) _DebugTierSection(),
             ],
           );
         },
@@ -272,6 +319,53 @@ class _ThemeRadio extends StatelessWidget {
       value: value,
       title: Text(title),
       subtitle: subtitle.isEmpty ? null : Text(subtitle),
+    );
+  }
+}
+
+/// Debug-only tier controls so both plans are testable without waiting out the
+/// 7-day trial or going through Play Billing. Stripped from release builds.
+class _DebugTierSection extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final e = Entitlements.I;
+    return ListenableBuilder(
+      listenable: e,
+      builder: (context, _) => Column(children: [
+        const _Section('Debug · tiers'),
+        SwitchListTile(
+          title: const Text('Force Pro'),
+          subtitle: Text(e.statusLabel),
+          value: e.debugPro,
+          onChanged: (v) => e.setDebugPro(v),
+        ),
+        ListTile(
+          leading: const Icon(Icons.timer_outlined),
+          title: const Text('Trial: jump to the last day'),
+          subtitle: const Text('Triggers the 1-day reminder on next resume'),
+          onTap: () async {
+            await e.fastForwardTrialToLastDay();
+            if (context.mounted) showTopToast(context, 'Trial ends tomorrow');
+          },
+        ),
+        ListTile(
+          leading: const Icon(Icons.timer_off_outlined),
+          title: const Text('Trial: end it now'),
+          subtitle: const Text('Free tier: 25 audios, 2 playlists, ads flag'),
+          onTap: () async {
+            await e.endTrialNow();
+            if (context.mounted) showTopToast(context, 'Free tier active');
+          },
+        ),
+        ListTile(
+          leading: const Icon(Icons.restart_alt),
+          title: const Text('Trial: reset'),
+          onTap: () async {
+            await e.resetTrial();
+            if (context.mounted) showTopToast(context, 'Trial reset');
+          },
+        ),
+      ]),
     );
   }
 }
