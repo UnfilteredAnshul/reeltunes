@@ -222,10 +222,11 @@ the SSV callback on the Worker. Anything else is farmable with a patched APK.
 4. **Slot C** (end-of-list card).
 5. Then rewarded + SSV + the coin ledger (needs the Cloudflare Worker).
 
-Release switch-over (before production): replace the sample app id
-(`ca-app-pub-3940256099942544~3347511713`) and build with
-`--dart-define=ADMOB_BANNER_UNIT=ca-app-pub-…/…`; `usingLiveAdUnit` in
-`lib/ads.dart` reports whether a real unit is in use.
+Release switch-over (before production): paste the AdMob app id into
+`AndroidManifest.xml` and the app id + banner unit into `lib/ad_config.dart`
+(or override with `--dart-define`); the full walkthrough is
+`docs/admob-setup.md`. `AdConfig.modeLabel` / `appIdMismatch` in
+Settings → Debug tiers report whether live units are actually in use.
 
 Expected app-size cost: ~1.5–2.5 MB for the AdMob SDK, plus ~300 KB per
 mediation adapter added later.

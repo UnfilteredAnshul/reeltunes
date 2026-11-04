@@ -93,7 +93,9 @@ None — no account, no login. Playback/library access is anonymous. The plan (F
 - Gapless `skipNext/skipPrev`, `_loadFailures` guard, engine-stream listeners for the glyphs, interruptions via `audio_session`.
 - **`removeIfCurrent(id)`** is index-surgical: it removes the row from `queue` and fixes `queueIndex`/`current` **first**, sets `_queueSurgery` so `_onIndexChange`/`_onPlaylistEnd` ignore the platform's transient events, then calls `removeAudioSourceAt(idx)`, then seeks to the new index and resumes only if it was playing. A failed engine removal rebuilds the flat playlist from `queue` (`_rebuildQueueAt`). Used by both "Remove from ReelTunes" and "Delete audio and file". The playlist itself is built with `setAudioSources([...], initialIndex:)` — **never** a nested `ConcatenatingAudioSource` (that nesting is what made the UI say "pqr" while "abc" played).
 ### lib/ads.dart
-- AdMob entry point. `Ads.I.init()` (idempotent) initializes `MobileAds`, then runs the **UMP** consent flow (`ConsentForm.loadAndShowConsentFormIfRequired`) with non-personalized fallback; `privacyOptionsRequired()` / `showPrivacyOptions()` power **Settings → Ad privacy choices**. `AdBanner` is slot B: an anchored adaptive banner above the mini bar, gated on `Entitlements.I.showAds` (never Pro, never during trial), backoff 30 s → 2 min → 5 min on no-fill. Debug always uses Google's sample unit `ca-app-pub-3940256099942544/6300978111`; release reads `--dart-define=ADMOB_BANNER_UNIT=…` and falls back to the sample unit until the real one exists (`usingLiveAdUnit` tells you which).
+- AdMob entry point. `Ads.I.init()` (idempotent) initializes `MobileAds`, then runs the **UMP** consent flow (`ConsentForm.loadAndShowConsentFormIfRequired`) with non-personalized fallback; `privacyOptionsRequired()` / `showPrivacyOptions()` power **Settings → Ad privacy choices**. `AdBanner` is slot B: an anchored adaptive banner above the mini bar, gated on `Entitlements.I.showAds` (never Pro, never during trial), backoff 30 s → 2 min → 5 min on no-fill.
+### lib/ad_config.dart
+- The only place ad ids live. `testAppId` / `testBannerUnit` are Google's sample values; `appId` / `bannerUnit` are the live values (overridable with `--dart-define`), and `useTestAds => kDebugMode` forces the sample unit in every debug build. `modeLabel` + `appIdMismatch` feed the **Settings → Debug tiers → "Ads: unit in use"** readout. Switching to live ads = paste the real app id here **and** in the manifest — see `docs/admob-setup.md`.
 ### lib/extractor.dart
 - `extractAndAdd(store,url,{title,folderIds,onStatus})`: `Engine.getVideoInfo` → sanitised name → yt-dlp into the cache → `FolderAccess.save` into the linked folder (playlist sub-folder when chosen) → Track with `fileName`, `sourceUrl` (the pasted link), URI path, duration.
 ### lib/link_rules.dart
@@ -206,7 +208,7 @@ $adb = "E:\Android\Sdk\platform-tools\adb.exe"
 - Release signing (debug key today), upload keystore / Play App Signing, AAB. **Play fee:** $25 one-time developer registration (no yearly fee); Play's subscription commission is 15% on the first $1M/year. **New personal accounts (created after 13 Nov 2023) must run a closed test with ≥12 testers opted in for 14 continuous days before production access is unlocked**; organization accounts need a D-U-N-S number instead.
 - **Subscriptions do not require a production app.** Create `reeltunes_pro_monthly` / `reeltunes_pro_annual` once a billing-enabled AAB is on an internal-testing track, wire RevenueCat, and test purchases with license testers; production can follow later. The live redeem dashboard can likewise ship in a later update.
 - **Play Console: create `reeltunes_pro_monthly` / `reeltunes_pro_annual` (7-day free trial offer), then RevenueCat dashboard: entitlement `pro`, offering `default`, packages `$rc_monthly` / `$rc_annual`, Play service-account JSON. Build with `--dart-define RC_ANDROID_KEY=goog_…`.** Until both exist, the paywall says "Pro isn't live yet".
-- Ads: **AdMob is integrated** (`google_mobile_ads` 9.2.0 + UMP consent, banner slot above the mini bar, Settings → Ad privacy choices). Still to do before release: real AdMob app id + banner unit, `app-ads.txt`, privacy policy + Data Safety naming AdMob/AAID, content rating 13+, and the "contains ads" declaration. Plan + slot rules in `docs/ads.md`.
+- Ads: **AdMob is integrated** (`google_mobile_ads` 9.2.0 + UMP consent, banner slot above the mini bar, Settings → Ad privacy choices). **The live switch is two ids**: paste them into `lib/ad_config.dart` + the manifest app id, rebuild a release APK — step-by-step in `docs/admob-setup.md`. Still to do before release: `app-ads.txt`, privacy policy + Data Safety naming AdMob/AAID, content rating 13+, and the "contains ads" declaration. Plan + slot rules in `docs/ads.md`.
 - Content-rights consent sheet + Settings toggle. **Link validation is done** (`lib/link_rules.dart`: `https` only, YouTube Shorts / Instagram Reels / Facebook / TikTok allowlist).
 - Generic branding in listing/screenshots (no platform names or logos); in-app licences screen (LICENSES/ already shipped in repo).
 - `allowBackup=false` + `dataExtractionRules` (or a deliberate backup story) — audit before release.
@@ -230,10 +232,11 @@ E:\Projects\ReelTune\
 │  ├─ models.dart · extractor.dart · engine.dart · library_sync.dart · folder_access.dart · link_rules.dart
 │  ├─ entitlements.dart                       # trial / free caps / Pro (single source of truth)
 │  ├─ ads.dart                                # AdMob init, UMP consent, anchored banner (slot B)
+│  ├─ ad_config.dart                          # app id + banner unit (test → live switch lives here)
 │  ├─ billing.dart                            # RevenueCat: configure, offerings, purchase, restore
 │  ├─ promo.dart · redeem_sheet.dart · code_admin.dart   # codes: registry, redeem sheet, in-app dashboard
 │  ├─ extraction_errors.dart · top_toast.dart · settings_screen.dart · emoji.dart · error_report.dart
-├─ docs/free-vs-pro.md · docs/ads.md · docs/promo-codes.md
+├─ docs/free-vs-pro.md · docs/ads.md · docs/promo-codes.md · docs/admob-setup.md
 ├─ tools/repack_engine.py                    # reproducible GPL strip of libpython.zip.so
 ├─ LICENSES/                                 # PSF-2.0, Apache-2.0, LGPL-2.1, Unlicense, QuickJS-MIT
 ├─ THIRD_PARTY_NOTICES.md                    # licence table + yt-dlp version

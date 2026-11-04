@@ -3,34 +3,22 @@
 // Free tier only (`Entitlements.showAds`): never during the trial, never for
 // Pro. Slots and the reasoning behind them live in `docs/ads.md`.
 //
-// Test ids are used in every debug build (tapping them is safe and expected).
-// A release build picks the real unit from
-//   --dart-define=ADMOB_BANNER_UNIT=ca-app-pub-…/…
-// and falls back to the sample unit, so an internal-testing AAB keeps working
-// before the AdMob console values exist.
+// Identifiers live in `lib/ad_config.dart`. Debug builds always use Google's
+// sample unit; release builds use the configured live unit.
 
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 
+import 'ad_config.dart';
 import 'entitlements.dart';
 
-/// Google's official sample banner unit.
-const String _testBannerUnit = 'ca-app-pub-3940256099942544/6300978111';
-
-/// Supplied by `--dart-define=ADMOB_BANNER_UNIT=...` in release builds.
-const String _releaseBannerUnit = String.fromEnvironment('ADMOB_BANNER_UNIT');
-
 /// The unit the banner should request right now.
-String get bannerUnitId =>
-    kDebugMode || _releaseBannerUnit.isEmpty
-        ? _testBannerUnit
-        : _releaseBannerUnit;
+String get bannerUnitId => AdConfig.bannerUnitId;
 
 /// True when a real, revenue-earning unit is configured.
-bool get usingLiveAdUnit => !kDebugMode && _releaseBannerUnit.isNotEmpty;
+bool get usingLiveAdUnit => AdConfig.bannerIsLive;
 
 class Ads {
   Ads._();

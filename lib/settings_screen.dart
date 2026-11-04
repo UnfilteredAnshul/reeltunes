@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'ad_config.dart';
 import 'ads.dart';
 import 'billing.dart';
 import 'code_admin.dart';
@@ -436,6 +437,23 @@ class _DebugTierSection extends StatelessWidget {
             if (context.mounted) showTopToast(context, 'Trial reset');
           },
         ),
+        const Divider(height: 1),
+        ListTile(
+          leading: const Icon(Icons.campaign_outlined),
+          title: const Text('Ads: unit in use'),
+          subtitle: Text(AdConfig.modeLabel),
+          isThreeLine: AdConfig.appIdMismatch,
+        ),
+        if (AdConfig.appIdMismatch)
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: Text(
+              'The Dart banner unit is live but AndroidManifest.xml still has '
+              "Google's sample app id. Paste the AdMob app id there before "
+              'building a release.',
+              style: TextStyle(fontSize: 12),
+            ),
+          ),
       ]),
     );
   }
