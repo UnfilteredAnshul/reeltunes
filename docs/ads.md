@@ -14,6 +14,7 @@ All four units are created in the ReelTunes AdMob account and wired in
 | Sticky above the mini bar | anchored adaptive banner | `…/1283639888` |
 | Playlist, after the 8th + 18th audio | banner card (same unit twice) | `…/2022006489` |
 | Coin shop / gold "Watch ad" FAB | rewarded video | `…/4971428445` |
+| Before any download / import (Free) | rewarded video gate | `…/1020962184` |
 | Cold start (after the coin splash) | app-open | `…/1962121722` |
 
 **Duplicating one unit twice in a list is allowed and earns the same** — AdMob
