@@ -22,6 +22,7 @@ dependencies:
   # Subscriptions. RevenueCat wraps Play Billing and keeps the entitlement
   # state in one place; the SDK key is injected at build time (see lib/billing.dart).
   purchases_flutter: ^11.0.0
+  google_mobile_ads: ^9.2.0
 
 dev_dependencies:
   flutter_test:

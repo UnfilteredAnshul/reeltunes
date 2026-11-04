@@ -209,14 +209,23 @@ the SSV callback on the Worker. Anything else is farmable with a patched APK.
 
 ## 5. Build order for the ads work
 
-1. `google_mobile_ads` (**9.2.0**), AdMob app ID, manifest meta-data, UMP flow,
-   `lib/ads.dart` with one banner controller + one interstitial + one rewarded.
-2. **Slot B** (sticky banner) — the simplest, and it validates fill and layout
+1. ~~`google_mobile_ads` (**9.2.0**), AdMob app ID, manifest meta-data, UMP flow,
+   `lib/ads.dart` with one banner controller + one interstitial + one rewarded.~~
+   **Done for the banner:** SDK 9.2.0, sample app id + test banner unit in
+   `AndroidManifest.xml` / `lib/ads.dart`, UMP consent + "Ad privacy choices"
+   in Settings. Interstitial/rewarded still parked.
+2. ~~**Slot B** (sticky banner)~~ — **done**: `AdBanner` above `MiniBar`, gated
+   on `Entitlements.showAds`, backoff on no-fill. This validates fill and layout
    on the real device before anything else is built on top.
 3. **Slot A** (post-download interstitial) with the 60 s floor and the
    first-download exemption.
 4. **Slot C** (end-of-list card).
 5. Then rewarded + SSV + the coin ledger (needs the Cloudflare Worker).
+
+Release switch-over (before production): replace the sample app id
+(`ca-app-pub-3940256099942544~3347511713`) and build with
+`--dart-define=ADMOB_BANNER_UNIT=ca-app-pub-…/…`; `usingLiveAdUnit` in
+`lib/ads.dart` reports whether a real unit is in use.
 
 Expected app-size cost: ~1.5–2.5 MB for the AdMob SDK, plus ~300 KB per
 mediation adapter added later.

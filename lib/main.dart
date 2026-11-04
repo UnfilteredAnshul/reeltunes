@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:receive_intent/receive_intent.dart' as ri;
 
+import 'ads.dart';
 import 'billing.dart';
 import 'entitlements.dart';
 import 'error_report.dart';
@@ -91,6 +93,9 @@ class _RootScreenState extends State<RootScreen>
       // Load the audios folder grant, restore a mirror after a reinstall and
       // pick up anything dropped in with a file manager.
       await LibrarySync.init();
+      // AdMob + UMP consent warm up in the background: the free-tier banner
+      // waits for `Ads.I.ready`, so the splash never blocks on the ad SDK.
+      unawaited(Ads.I.init());
       _listenShareIntents();
       if (!mounted) return;
       if (!AppStore.I.audiosLinked) {

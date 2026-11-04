@@ -520,11 +520,37 @@ class AppStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Ids a Free plan is allowed to see: the newest [Entitlements.freeMaxTracks]
+  /// audios. Returns null when there is no cap (Pro, or the library fits).
+  ///
+  /// The extra files are neither deleted nor removed from `tracks` — they stay
+  /// on the phone and reappear the moment the user upgrades.
+  Set<String>? _freeCapIds() {
+    final max = Entitlements.freeMaxTracks;
+    if (Entitlements.I.isPro || tracks.length <= max) return null;
+    final indexes = List<int>.generate(tracks.length, (i) => i);
+    indexes.sort((a, b) {
+      // Newest first. A later position in store order wins ties, which is the
+      // order imports append in (`_persist` preserves it).
+      final c = tracks[b].addedAtMs.compareTo(tracks[a].addedAtMs);
+      return c != 0 ? c : b.compareTo(a);
+    });
+    return {for (final i in indexes.take(max)) tracks[i].id};
+  }
+
+  /// How many audios exist but are hidden by the Free cap (0 when Pro/under).
+  int get hiddenByFreeCap {
+    final max = Entitlements.freeMaxTracks;
+    if (Entitlements.I.isPro || tracks.length <= max) return 0;
+    return tracks.length - max;
+  }
+
   /// Tracks matching the current folder + name search + date filter, in
   /// store order. One place so the count, list, grid and play queue agree.
   List<Track> _baseVisible() {
     final sel = selectedFolderId;
     final q = searchQuery.trim().toLowerCase();
+    final capIds = _freeCapIds();
     final now = DateTime.now();
     final sinceMs = switch (dateFilter) {
       DateFilter.any => 0,
@@ -536,6 +562,7 @@ class AppStore extends ChangeNotifier {
         now.subtract(const Duration(days: 30)).millisecondsSinceEpoch,
     };
     return tracks.where((t) {
+      if (capIds != null && !capIds.contains(t.id)) return false;
       if (sel != null && !t.folderIds.contains(sel)) return false;
       if (q.isNotEmpty && !t.title.toLowerCase().contains(q)) return false;
       if (sinceMs > 0 && (t.addedAtMs <= 0 || t.addedAtMs < sinceMs)) {

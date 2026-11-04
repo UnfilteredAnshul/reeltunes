@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:reorderable_grid_view/reorderable_grid_view.dart';
 
+import 'ads.dart';
 import 'entitlements.dart';
 import 'folder_access.dart';
 import 'models.dart';
@@ -107,7 +108,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
     return Listener(
       onPointerDown: (_) => _noteInteraction(),
       child: ListenableBuilder(
-        listenable: store,
+        // Entitlements too: flipping Force Free / a purchase changes the
+        // 25-audio cap, so the list must re-filter immediately.
+        listenable: Listenable.merge([store, Entitlements.I]),
         builder: (context, _) {
         final selected = store.selectedFolderId;
         return Scaffold(
@@ -177,10 +180,14 @@ class _LibraryScreenState extends State<LibraryScreen> {
                     ],
                   ),
                 ),
-          // Always visible: shows the playing track, else the last audio that
-          // was played (persisted across launches), else an idle row. It is the
-          // anchor the free-tier ad strip sits directly above.
-          bottomNavigationBar: const MiniBar(),
+          // Free-tier banner (slot B in docs/ads.md) sits directly above the
+          // mini bar and disappears for Pro. The bar itself is always mounted:
+          // it shows the playing track, else the last audio played (persisted
+          // across launches), else an idle row.
+          bottomNavigationBar: const Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [AdBanner(), MiniBar()],
+          ),
           body: CustomScrollView(
             slivers: [
               if (store.anyArranging)
@@ -297,6 +304,45 @@ class _LibraryScreenState extends State<LibraryScreen> {
                                     color: Theme.of(context)
                                         .colorScheme
                                         .onSecondaryContainer),
+                              ),
+                            ),
+                            const Icon(Icons.chevron_right, size: 18),
+                          ]),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              if (store.hiddenByFreeCap > 0)
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  sliver: SliverToBoxAdapter(
+                    child: Material(
+                      color: Theme.of(context).colorScheme.tertiaryContainer,
+                      borderRadius: BorderRadius.circular(12),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(12),
+                        onTap: () => showPaywallSheet(context,
+                            reason: 'Free shows the newest 25 audios'),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 10),
+                          child: Row(children: [
+                            Icon(Icons.lock_outline,
+                                size: 18,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onTertiaryContainer),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                '${store.hiddenByFreeCap} older '
+                                '${store.hiddenByFreeCap == 1 ? 'audio is' : 'audios are'}'
+                                ' hidden on Free · files stay on your phone',
+                                style: TextStyle(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onTertiaryContainer),
                               ),
                             ),
                             const Icon(Icons.chevron_right, size: 18),
@@ -1611,8 +1657,23 @@ int _addWithinCap(List<Track> picked) {
   return added;
 }
 
+/// Free tier check before a picker/download starts. Returns true when the
+/// import is blocked, and shows the paywall so the refusal is never silent.
+bool paywallIfAtTrackCap(BuildContext? context, {String? reason}) {
+  final max = Entitlements.freeMaxTracks;
+  if (Entitlements.I.importBlockReason(AppStore.I.tracks.length) == null) {
+    return false;
+  }
+  if (context != null && context.mounted) {
+    showPaywallSheet(context,
+        reason: reason ?? 'Free tier holds $max audios');
+  }
+  return true;
+}
+
 /// Pick audio/video files (one or many). Returns how many were imported.
 Future<int> importMediaFiles([BuildContext? context]) async {
+  if (paywallIfAtTrackCap(context)) return 0;
   final picked = await _pickMedia(folder: false);
   if (context != null && !context.mounted) return 0;
   return _importPicked(context, picked);
@@ -1621,12 +1682,14 @@ Future<int> importMediaFiles([BuildContext? context]) async {
 /// Pick a folder and import every audio/video inside it, recursively —
 /// DCIM-style folders keep their clips in sub-folders such as Camera/.
 Future<int> importMediaFolder([BuildContext? context]) async {
+  if (paywallIfAtTrackCap(context)) return 0;
   final picked = await _pickMedia(folder: true);
   if (context != null && !context.mounted) return 0;
   return _importPicked(context, picked);
 }
 
 Future<Track?> importAudioFile([BuildContext? context]) async {
+  if (paywallIfAtTrackCap(context)) return null;
   // Audio OR video, reference-imported over SAF (nothing copied): a video
   // here simply plays its own audio layer. Used by Add reel's
   // "Or import an audio file instead".

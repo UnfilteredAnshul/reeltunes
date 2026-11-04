@@ -40,17 +40,25 @@ re-scan, "Remove from ReelTunes", delete, existing data.
 
 ## 2. Enforcement rules (the boring part that decides refunds)
 
-- **Cap 25:** counted on *library entries*, not files. When the folder scan finds
-  more than 25, add the 25 newest and show one sticky row:
-  `"17 more files in your folder · Pro to add"`. Nothing is deleted, renamed or
-  hidden from the file manager.
-- **Import:** stop at the cap, toast `"Free tier holds 25 audios · Pro for more"`.
-  Never partially import then fail silently.
+- **Cap 25:** counted on *library entries*, not files. Every list, search,
+  playlist and play queue runs through `AppStore._baseVisible()`, which on Free
+  keeps only the **newest 25 entries by `addedAtMs`** whenever the library is
+  larger (e.g. it grew during the trial). The older entries are **hidden, not
+  deleted**; one notice row reads
+  `"N older audios are hidden on Free · files stay on your phone"` and opens the
+  paywall. Upgrading brings them all back instantly.
+- **Import:** every add path (link extraction, file picker, folder import,
+  post-download prompt) checks `importBlockReason(tracks.length)` **before** it
+  starts and shows the paywall at 25 — no partial import, no silent drop.
+- **Folder scan / rescan:** stops at `Entitlements.maxTracks` (25 on Free), so
+  extra files are counted in the existing "more files in your folder" row and
+  never imported. Nothing is deleted, renamed or hidden from the file manager.
 - **Playlists:** creating the 3rd is blocked; existing playlists above 2 stay
   fully usable but read-only (rename/add-to disabled) so a lapse never destroys
   work.
 - **Downgrade / refund / cancel:** library keeps all tracks, the newest 25 stay
-  playable, the rest show as locked rows (tap → paywall sheet). Files untouched.
+  visible and playable, older ones are hidden behind the notice/paywall. Files
+  untouched.
 - **Custom range:** hidden behind the paywall chip on Free; Smart is capped at
   3–6; ∞ stays on the repeat icon.
 - **One choke point:** `Entitlements` exposes `maxTracks`, `maxPlaylists`,

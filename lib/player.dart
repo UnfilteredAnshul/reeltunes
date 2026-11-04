@@ -63,6 +63,11 @@ class RtPlayer extends ChangeNotifier {
   /// fails we must stop instead of looping forever (that loop was the
   /// "crashes 2 s after tapping play").
   int _loadFailures = 0;
+  /// True while `removeIfCurrent` is mutating both the engine playlist and our
+  /// `queue`. Index/completion events fired by the platform mid-surgery would
+  /// otherwise be interpreted as "a track finished" and move the UI to a row
+  /// that does not match what is actually playing.
+  bool _queueSurgery = false;
   bool get queuePlayable => queue.isNotEmpty && queueIndex >= 0;
 
   bool get playing {
@@ -201,8 +206,12 @@ class RtPlayer extends ChangeNotifier {
     _silentFire();
     try {
       final sources = <AudioSource>[for (final q in queue) _sourceFor(q)];
-      await _ap!.setAudioSource(
-        ConcatenatingAudioSource(children: sources),
+      // One source per queue row — never a nested ConcatenatingAudioSource.
+      // With nesting, the player's own playlist has a single child while
+      // `queue` has N rows, so `removeAudioSourceAt(i)` deleted the whole
+      // nested playlist (or threw) and the UI/engine drifted apart.
+      await _ap!.setAudioSources(
+        sources,
         initialIndex: queueIndex.clamp(0, sources.length - 1),
       );
       _rememberDuration(t);
@@ -439,6 +448,9 @@ class RtPlayer extends ChangeNotifier {
   }
 
   void _onIndexChange(int? i) {
+    // Mid-surgery the platform index is briefly out of step with `queue`;
+    // `removeIfCurrent` owns the state and will settle it.
+    if (_queueSurgery) return;
     if (i == null || !queuePlayable || i == queueIndex) return;
     final natural = DateTime.now().isAfter(_manualAdvanceUntil);
     // Smart learning: a custom-range track that played out its whole count
@@ -460,6 +472,9 @@ class RtPlayer extends ChangeNotifier {
   /// Queue exhausted (last pass of the last item). Wrap to the top instead of
   /// stopping dead — playback here is an endless reel loop.
   Future<void> _onPlaylistEnd() async {
+    // A removal can push the engine into "completed" while `queue` is being
+    // rebuilt — that is not the end of the queue, so don't seek to the top.
+    if (_queueSurgery) return;
     if (!queuePlayable) return;
     // The last queue item ends here instead of an index change — record its
     // custom-range completion before wrapping (same Smart-learning signal).
@@ -501,6 +516,11 @@ class RtPlayer extends ChangeNotifier {
   /// A track was removed from the library. Keep playing: the queue drops the
   /// item and, if it was the one playing, the next one starts instead of
   /// silence. (Previously this stopped the player dead.)
+  ///
+  /// Order matters: our `queue`/`queueIndex`/`current` are updated FIRST, then
+  /// the engine playlist is edited, then the engine is asked to land on the new
+  /// index. Doing it the other way round let the platform's index events race
+  /// ahead of the list and made the UI show "pqr" while "abc" was audible.
   Future<void> removeIfCurrent(String id) async {
     final idx = queue.indexWhere((t) => t.id == id);
     if (idx < 0) {
@@ -511,45 +531,78 @@ class RtPlayer extends ChangeNotifier {
       }
       return;
     }
-    final wasCurrent = current?.id == id;
+    final wasCurrent = queueIndex == idx;
+    final wasPlaying = playing;
     _markManualAdvance();
-    // Remove from the loaded playlist first so the engine's indices and
-    // `queue` stay in step; otherwise the next skip would land on the wrong
-    // item.
-    if (_booted && _ap != null) {
-      try {
-        await _ap!.removeAudioSourceAt(idx);
-      } catch (e) {
-        debugPrint('queue remove failed: $e');
+    _queueSurgery = true;
+    try {
+      queue.removeAt(idx);
+      if (queue.isEmpty) {
+        current = null;
+        queueIndex = -1;
+      } else {
+        // Removing an earlier row shifts the live row one place up; removing
+        // the live row itself leaves its successor at the same position (the
+        // clamp keeps us on the previous row when the last one is removed).
+        if (idx < queueIndex) queueIndex--;
+        queueIndex = queueIndex.clamp(0, queue.length - 1);
+        current = queue[queueIndex];
+        AppStore.I.setLastPlayedId(current!.id);
       }
-    }
-    queue.removeAt(idx);
-    if (queue.isEmpty) {
-      current = null;
-      queueIndex = -1;
-      if (_booted) await _ap!.stop();
       _silentFire();
-      return;
-    }
-    if (idx < queueIndex) queueIndex--;
-    queueIndex = queueIndex.clamp(0, queue.length - 1);
-    if (wasCurrent) {
-      current = queue[queueIndex];
-      AppStore.I.setLastPlayedId(current!.id);
+
       if (_booted && _ap != null) {
         try {
-          // The removed item may have been the last one in the queue, which
-          // leaves the engine parked at its end (or stopped). Land on the item
-          // that took its place, from the start.
+          await _ap!.removeAudioSourceAt(idx);
+        } catch (e, s) {
+          // The engine playlist can already differ (older builds nested it).
+          // Rebuilding from `queue` is the only safe recovery.
+          reportError('queue remove failed', e, s);
+          await _rebuildQueueAt(queueIndex);
+          if (wasPlaying) unawaited(_ap!.play());
+          return;
+        }
+      }
+
+      if (queue.isEmpty) {
+        if (_booted) await _ap!.stop();
+        return;
+      }
+
+      if (wasCurrent && _booted && _ap != null) {
+        try {
+          // The removed row may have been the last one, leaving the engine
+          // parked at the end. Land on the row that took its place, at 0:00.
           await _ap!.seek(Duration.zero, index: queueIndex);
         } catch (e, s) {
           reportError('advance after remove failed', e, s);
         }
+        _newTrackLoops();
+        if (wasPlaying) unawaited(_ap!.play());
       }
-      _newTrackLoops();
-      if (_booted) unawaited(_ap!.play());
+    } finally {
+      _queueSurgery = false;
+      _silentFire();
     }
-    _silentFire();
+  }
+
+  /// Reloads the engine playlist from `queue` and seeks to [index] (paused).
+  /// Only used as a recovery path when the engine and our list disagree.
+  Future<void> _rebuildQueueAt(int index) async {
+    final ap = _ap;
+    if (ap == null || queue.isEmpty) return;
+    final target = index.clamp(0, queue.length - 1);
+    try {
+      await ap.setAudioSources(
+        [for (final q in queue) _sourceFor(q)],
+        initialIndex: target,
+      );
+      queueIndex = target;
+      current = queue[target];
+      _newTrackLoops();
+    } catch (e, s) {
+      reportError('queue rebuild failed', e, s);
+    }
   }
 
   void _silentFire() => notifyListeners();

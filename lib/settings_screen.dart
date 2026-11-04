@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'ads.dart';
 import 'billing.dart';
 import 'code_admin.dart';
 import 'entitlements.dart';
@@ -122,6 +123,8 @@ class SettingsScreen extends StatelessWidget {
                 value: store.playDuringCalls,
                 onChanged: (v) => store.setPlayDuringCalls(v),
               ),
+              const _Section('Privacy'),
+              const _AdPrivacyTile(),
               const _Section('Support'),
               ListTile(
                 leading: const Icon(Icons.bug_report_outlined),
@@ -327,6 +330,31 @@ Future<String?> importAudioPickFolder() async {
     dialogTitle: 'Choose where audios are saved',
   );
   return p ?? _importAudioPickFolderValue;
+}
+
+/// Opens Google's UMP consent / privacy options form. Always present in debug
+/// so the flow is testable; in release AdMob tells us whether the row is
+/// required (EEA/UK/CH users) and we render it when it is.
+class _AdPrivacyTile extends StatelessWidget {
+  const _AdPrivacyTile();
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<bool>(
+      future: Ads.I.privacyOptionsRequired(),
+      builder: (context, snap) {
+        final required = snap.data ?? false;
+        if (!kDebugMode && !required) return const SizedBox.shrink();
+        return ListTile(
+          leading: const Icon(Icons.privacy_tip_outlined),
+          title: const Text('Ad privacy choices'),
+          subtitle: const Text(
+              'Change how ads may use your data · Google AdMob'),
+          onTap: () => Ads.I.showPrivacyOptions(),
+        );
+      },
+    );
+  }
 }
 
 class _Section extends StatelessWidget {
