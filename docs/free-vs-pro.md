@@ -72,24 +72,38 @@ re-scan, "Remove from ReelTunes", delete, existing data.
 It converts ad inventory into something the user chose, which keeps ads from
 feeling like a tax.
 
+> **What is implemented today (`lib/coins.dart` + `lib/shop_sheet.dart`):**
+> **5 coins per completed rewarded video**; **20 coins = no ads for 24 h**;
+> **25 coins = +25 audio slots for 30 days**. The wallet is local
+> (SharedPreferences) until the SSV ledger exists. The shop, balance and
+> gold "Watch ad" button are **Free-only**; a coin purchase never changes the
+> plan, so they stay visible while a 24 h ad-free window is running.
+
 ### Earning
-- **1 coin per completed rewarded video.** Completion is confirmed by the ad
-  network's **server-side verification (SSV)** callback, not the app — the app
-  cannot mint coins by patching code.
+- **5 coins per completed rewarded video** in the local build. Production:
+  completion is confirmed by the ad network's **server-side verification (SSV)**
+  callback, not the app — the app cannot mint coins by patching code.
 - **Daily earn cap** (start at **15–20 ads/day**) so inventory isn't burned and
   nobody farms the shop. Number is a server constant, not in the APK.
 - No coins for banners or interstitials — only videos the user opened.
 
 ### Shop (all items timed, all expire)
-| Item | Suggested cost | Duration |
-|---|---|---|
-| No ads | 20 coins | 24 h |
-| +25 audio slots | 25 coins | 30 days |
-| 3rd playlist slot | 15 coins | 30 days |
-| Custom loop range | 10 coins | 7 days |
+| Item | Cost today | Duration | State |
+|---|---|---|---|
+| No ads | 20 coins | 24 h | **implemented** |
+| +25 audio slots | 25 coins | 30 days | **implemented** |
+| 3rd playlist slot | 15 coins | 30 days | planned |
+| Custom loop range | 10 coins | 7 days | planned |
 
 Final numbers **after** you see real eCPM. Because costs are server-side, you
-change prices without shipping an update.
+change prices without shipping an update. Buying an active perk again extends
+it instead of resetting the clock.
+
+### Ad-free is a pause, not a plan change
+`Entitlements.showAds` is `capped && !CoinWallet.adFree`. A purchased 24 h
+window hides the sticky banner, the playlist cards and the app-open/rewarded
+prompts while leaving the shop, balance and "watch ad" button untouched — the
+user can keep earning during the pause. Pro/trial still hide all coin UI.
 
 ### The money guardrail (important)
 Indian rewarded eCPM is roughly **$1–4 per 1000 views** → **≈ ₹0.10–0.35 per

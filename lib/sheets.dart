@@ -236,7 +236,8 @@ class _AddReelSheetState extends State<AddReelSheet> {
     // Check the cap before the engine runs: never download a file the library
     // is not allowed to list.
     if (Entitlements.I.importBlockReason(AppStore.I.tracks.length) != null) {
-      showPaywallSheet(context, reason: 'Free tier holds 25 audios');
+      showPaywallSheet(context,
+          reason: 'Free tier holds ${Entitlements.I.maxTracks} audios');
       return;
     }
     setState(() {

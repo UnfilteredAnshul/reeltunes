@@ -14,6 +14,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'coins.dart';
+
 class Entitlements extends ChangeNotifier {
   Entitlements._();
   static final Entitlements I = Entitlements._();
@@ -72,7 +74,15 @@ class Entitlements extends ChangeNotifier {
       _grantUntil = DateTime.fromMillisecondsSinceEpoch(grantMs);
     }
     _grantCode = prefs.getString('grantCode');
+    // A coin-shop perk (ad-free window, extra slots) must rebuild every gate
+    // that reads `showAds` / `maxTracks`.
+    if (!_coinsHooked) {
+      _coinsHooked = true;
+      CoinWallet.I.addListener(_changed);
+    }
   }
+
+  bool _coinsHooked = false;
 
   void _changed() => notifyListeners();
 
@@ -187,21 +197,26 @@ class Entitlements extends ChangeNotifier {
   /// shop opens on day 8 — not during the trial.
   bool get shopAvailable => capped;
 
-  int get maxTracks => isPro ? 1 << 20 : freeMaxTracks;
+  int get maxTracks =>
+      isPro ? 1 << 20 : freeMaxTracks + CoinWallet.I.bonusTracks;
   int get maxPlaylists => isPro ? 1 << 20 : freeMaxPlaylists;
   bool get canUseCustomRange => isPro;
-  bool get showAds => capped;
+
+  /// Ads are on for Free only — and a coin-shop "no ads · 24 h" purchase pauses
+  /// them without changing the plan (the shop and earn button stay available).
+  bool get showAds => capped && !CoinWallet.I.adFree;
 
   bool canAddTracks(int current, [int adding = 1]) =>
-      isPro || current + adding <= freeMaxTracks;
+      isPro || current + adding <= maxTracks;
 
   bool canAddPlaylist(int current) => isPro || current < freeMaxPlaylists;
 
   /// One plain sentence for a blocked import. Null when allowed.
   String? importBlockReason(int current) {
     if (isPro) return null;
-    if (current >= freeMaxTracks) {
-      return 'Free tier holds $freeMaxTracks audios · Pro for more';
+    final max = maxTracks;
+    if (current >= max) {
+      return 'Free tier holds $max audios · Pro for more';
     }
     return null;
   }

@@ -10,6 +10,7 @@ import 'ad_config.dart';
 import 'ads.dart';
 import 'billing.dart';
 import 'code_admin.dart';
+import 'coins.dart';
 import 'entitlements.dart';
 import 'library_sync.dart';
 import 'models.dart';
@@ -394,8 +395,9 @@ class _DebugTierSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final e = Entitlements.I;
+    final coins = CoinWallet.I;
     return ListenableBuilder(
-      listenable: e,
+      listenable: Listenable.merge([e, coins, Ads.I]),
       builder: (context, _) => Column(children: [
         const _Section('Debug · tiers'),
         SwitchListTile(
@@ -438,6 +440,50 @@ class _DebugTierSection extends StatelessWidget {
           },
         ),
         const Divider(height: 1),
+        ListTile(
+          leading: const Icon(Icons.monetization_on_outlined),
+          title: Text('Coins: ${coins.balance}'),
+          subtitle: Text(coins.adFree
+              ? 'No-ads window active until '
+                  '${coins.adFreeUntil?.day}/${coins.adFreeUntil?.month} '
+                  '${coins.adFreeUntil?.hour.toString().padLeft(2, '0')}:'
+                  '${coins.adFreeUntil?.minute.toString().padLeft(2, '0')}'
+              : 'Shop perks expire on their own'),
+          isThreeLine: coins.adFree,
+        ),
+        Row(children: [
+          Expanded(
+            child: TextButton.icon(
+              onPressed: () async {
+                await coins.debugGrant();
+                if (context.mounted) showTopToast(context, '+100 coins');
+              },
+              icon: const Icon(Icons.add_circle_outline),
+              label: const Text('Give 100 coins'),
+            ),
+          ),
+          Expanded(
+            child: TextButton.icon(
+              onPressed: () async {
+                await coins.debugReset();
+                if (context.mounted) {
+                  showTopToast(context, 'Coins and perks cleared');
+                }
+              },
+              icon: const Icon(Icons.delete_sweep_outlined),
+              label: const Text('Reset coins'),
+            ),
+          ),
+        ]),
+        const Divider(height: 1),
+        SwitchListTile(
+          title: const Text('Use test ad units'),
+          subtitle: const Text(
+              'Google samples, safe to tap. Off = live AdMob units '
+              '(never tap your own ad).'),
+          value: Ads.I.useTestAds,
+          onChanged: (v) => Ads.I.setUseTestAds(v),
+        ),
         ListTile(
           leading: const Icon(Icons.campaign_outlined),
           title: const Text('Ads: unit in use'),

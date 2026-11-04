@@ -8,12 +8,14 @@ import 'package:flutter/services.dart';
 import 'package:reorderable_grid_view/reorderable_grid_view.dart';
 
 import 'ads.dart';
+import 'coins.dart';
 import 'entitlements.dart';
 import 'folder_access.dart';
 import 'models.dart';
 import 'player.dart';
 import 'settings_screen.dart';
 import 'sheets.dart';
+import 'shop_sheet.dart';
 import 'top_toast.dart';
 
 class LibraryScreen extends StatefulWidget {
@@ -32,6 +34,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
   Timer? _collapseTimer;
   DateTime _nextNudge = DateTime.now().add(const Duration(seconds: 7));
   bool _importExpanded = false;
+
+  /// Rewarded ad in flight (disables the gold FAB so a double tap cannot open
+  /// two full-screen ads).
+  bool _adBusy = false;
 
   // ---- name search ----
   final _searchCtrl = TextEditingController();
@@ -108,9 +114,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
     return Listener(
       onPointerDown: (_) => _noteInteraction(),
       child: ListenableBuilder(
-        // Entitlements too: flipping Force Free / a purchase changes the
-        // 25-audio cap, so the list must re-filter immediately.
-        listenable: Listenable.merge([store, Entitlements.I]),
+        // Entitlements + coins: flipping Force Free / a purchase / a shop perk
+        // changes the audio cap and the ad flag, so the list must re-filter
+        // immediately.
+        listenable: Listenable.merge([store, Entitlements.I, CoinWallet.I]),
         builder: (context, _) {
         final selected = store.selectedFolderId;
         return Scaffold(
@@ -133,6 +140,18 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 icon: Icon(_searchOpen ? Icons.close : Icons.search),
                 onPressed: _toggleSearch,
               ),
+              // Free tier only: coin shop + gold balance beside search.
+              // Pro / trial hide them; a coin purchase does not change the
+              // plan, so they remain while a 24 h ad-free window runs.
+              if (Entitlements.I.shopAvailable) ...[
+                IconButton(
+                  tooltip: 'Coin shop',
+                  icon: const Icon(Icons.storefront_outlined),
+                  onPressed: () => showShopSheet(context),
+                ),
+                CoinBalanceChip(onTap: () => showShopSheet(context)),
+                const SizedBox(width: 4),
+              ],
               IconButton(
                 tooltip: 'Settings',
                 icon: const Icon(Icons.settings_outlined),
@@ -160,6 +179,14 @@ class _LibraryScreenState extends State<LibraryScreen> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
+                      if (Entitlements.I.shopAvailable) ...[
+                        _WatchAdFab(
+                          expanded: _importExpanded,
+                          busy: _adBusy,
+                          onPressed: _watchAd,
+                        ),
+                        const SizedBox(height: 12),
+                      ],
                       _ImportFab(
                         expanded: _importExpanded,
                         onPressed: _openImportSheet,
@@ -284,7 +311,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
                       child: InkWell(
                         borderRadius: BorderRadius.circular(12),
                         onTap: () => showPaywallSheet(context,
-                            reason: 'Free tier holds 25 audios'),
+                            reason:
+                                'Free tier holds ${Entitlements.I.maxTracks} audios'),
                         child: Padding(
                           padding: const EdgeInsets.symmetric(
                               horizontal: 14, vertical: 10),
@@ -323,7 +351,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
                       child: InkWell(
                         borderRadius: BorderRadius.circular(12),
                         onTap: () => showPaywallSheet(context,
-                            reason: 'Free shows the newest 25 audios'),
+                            reason:
+                                'Free shows the newest ${Entitlements.I.maxTracks} audios'),
                         child: Padding(
                           padding: const EdgeInsets.symmetric(
                               horizontal: 14, vertical: 10),
@@ -365,12 +394,36 @@ class _LibraryScreenState extends State<LibraryScreen> {
     );
   }
 
+  /// Gold FAB: one rewarded video → coins. The coin balance, the shop and this
+  /// button deliberately survive a coin-shop purchase (only the ads stop).
+  Future<void> _watchAd() async {
+    if (_adBusy) return;
+    _noteInteraction();
+    setState(() => _adBusy = true);
+    try {
+      final earned = await Ads.I.showRewarded();
+      if (!mounted) return;
+      if (earned) {
+        await CoinWallet.I.addFromAd();
+        if (mounted) {
+          showTopToast(context, '+${CoinWallet.coinsPerAd} coins');
+        }
+      } else {
+        showTopToast(context, 'No ad available right now — try again.',
+            error: true);
+      }
+    } finally {
+      if (mounted) setState(() => _adBusy = false);
+    }
+  }
+
   /// Import intake: pick files (audio AND video) or a whole folder of
   /// videos. Videos play their audio track directly — the file is never
   /// touched: not copied, not deleted, zero storage waste.
   Future<void> _openImportSheet() async {
     if (Entitlements.I.importBlockReason(AppStore.I.tracks.length) != null) {
-      showPaywallSheet(context, reason: 'Free tier holds 25 audios');
+      showPaywallSheet(context,
+          reason: 'Free tier holds ${Entitlements.I.maxTracks} audios');
       return;
     }
     final choice = await showModalBottomSheet<String>(
@@ -941,6 +994,45 @@ class _ChoiceRow extends StatelessWidget {
 class _TracksView extends StatelessWidget {
   final AppStore store;
   const _TracksView(this.store);
+
+  /// Free plan: two in-list ad cards, after the 8th and 18th audio, both using
+  /// the playlist unit. Display indices are mapped back to track indices so
+  /// dragging never counts an ad as an audio. Grid view skips them (a 320 px
+  /// banner cannot be shown at grid-card size without cropping, and cropping
+  /// an ad is against AdMob policy).
+  List<Track?> _entries(List<Track> list) {
+    if (!Entitlements.I.showAds || store.arrangingTracks) {
+      return List<Track?>.of(list);
+    }
+    final out = <Track?>[];
+    for (var i = 0; i < list.length; i++) {
+      out.add(list[i]);
+      if ((i == 7 || i == 17) && i != list.length - 1) out.add(null);
+    }
+    return out;
+  }
+
+  int _trackIndexAt(List<Track?> entries, int display) {
+    if (display < 0 || display >= entries.length) return -1;
+    if (entries[display] == null) return -1;
+    var n = 0;
+    for (var i = 0; i < display; i++) {
+      if (entries[i] != null) n++;
+    }
+    return n;
+  }
+
+  void _onReorder(List<Track?> entries, int oldDisplay, int newDisplay) {
+    final oldTrack = _trackIndexAt(entries, oldDisplay);
+    if (oldTrack < 0) return;
+    var target = 0;
+    for (var i = 0; i < newDisplay && i < entries.length; i++) {
+      if (i != oldDisplay && entries[i] != null) target++;
+    }
+    store.reorderVisibleTracks(
+        oldTrack, target > oldTrack ? target + 1 : target);
+  }
+
   @override
   Widget build(BuildContext context) {
     final list = store.visibleTracksSorted;
@@ -978,24 +1070,34 @@ class _TracksView extends StatelessWidget {
       );
     }
     // List view = drag to rearrange (writes that order back into the store).
+    final entries = _entries(list);
     return SliverReorderableList(
-      itemCount: list.length,
-      onReorder: (o, n) => store.reorderVisibleTracks(o, n),
+      itemCount: entries.length,
+      onReorder: (o, n) => _onReorder(entries, o, n),
       proxyDecorator: (child, index, animation) => ScaleTransition(
         scale: animation.drive(
             Tween(begin: 1.0, end: 1.05).chain(CurveTween(curve: Curves.ease))),
         child: Material(elevation: 2, borderRadius: BorderRadius.circular(12), child: child),
       ),
-      itemBuilder: (c, i) => KeyedSubtree(
-          key: ValueKey(list[i].id),
-          child: TrackTile(
-              track: list[i],
-              onTap: () => _play(list[i], c),
-              all: list,
-              handle: ReorderableDragStartListener(
-                  index: i,
-                  child: Icon(Icons.drag_handle, size: 20,
-                      color: Theme.of(c).colorScheme.onSurfaceVariant)))),
+      itemBuilder: (c, i) {
+        final t = entries[i];
+        if (t == null) {
+          return KeyedSubtree(
+            key: ValueKey('playlist-ad-$i'),
+            child: const PlaylistAdCard(),
+          );
+        }
+        return KeyedSubtree(
+            key: ValueKey(t.id),
+            child: TrackTile(
+                track: t,
+                onTap: () => _play(t, c),
+                all: list,
+                handle: ReorderableDragStartListener(
+                    index: i,
+                    child: Icon(Icons.drag_handle, size: 20,
+                        color: Theme.of(c).colorScheme.onSurfaceVariant))));
+      },
     );
   }
 
@@ -1076,13 +1178,14 @@ class _EmptyLibrary extends StatelessWidget {
 
 /// Import button: a folder icon in a circle by default. When the app has been
 /// idle it morphs into a pill, shows "Import audio" for a moment, then slips
-/// back. Animated by hand because the stock FAB's isExtended flag swaps
-/// abruptly (and extended mode keeps a permanent 8 px label gap).
+/// back. The pill sizes itself to its label — no reserved trailing gap — while
+/// the FAB slot underneath keeps the row from shifting.
 class _ImportFab extends StatelessWidget {
   static const double _collapsed = 56;
 
-  /// Exposed so the FAB slot can reserve this width, which keeps the button
-  /// under it from shifting while the pill animates.
+  /// Exposed so the FAB slot can reserve this width, which keeps the buttons
+  /// below from shifting while the pill animates. The pill itself never grows
+  /// past its content, so no empty icon-width space trails the label.
   static const double expandedWidth = 184;
   final bool expanded;
   final VoidCallback onPressed;
@@ -1091,10 +1194,7 @@ class _ImportFab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 260),
-      curve: Curves.easeOutCubic,
-      width: expanded ? expandedWidth : _collapsed,
+    return Container(
       height: _collapsed,
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
@@ -1110,38 +1210,126 @@ class _ImportFab extends StatelessWidget {
         child: InkWell(
           onTap: onPressed,
           customBorder: const StadiumBorder(),
-          // Lay the full pill out regardless of the animated width, then let
-          // the container clip it — no RenderFlex overflow while it morphs.
-          child: OverflowBox(
-            alignment: Alignment.centerLeft,
-            minWidth: expandedWidth,
-            maxWidth: expandedWidth,
-            child: Row(children: [
-              const SizedBox(width: 16),
-              Icon(Icons.folder_open, color: scheme.onPrimaryContainer),
-              ClipRect(
-                child: TweenAnimationBuilder<double>(
-                  tween: Tween(begin: 0, end: expanded ? 1 : 0),
-                  duration: const Duration(milliseconds: 260),
-                  curve: Curves.easeOutCubic,
-                  builder: (context, v, child) => Align(
-                    alignment: Alignment.centerLeft,
-                    widthFactor: v,
-                    child: Opacity(opacity: v, child: child),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.only(left: 10, right: 16),
-                    child: Text(
-                      'Import audio',
-                      maxLines: 1,
-                      style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          color: scheme.onPrimaryContainer),
+          child: TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0, end: expanded ? 1 : 0),
+            duration: const Duration(milliseconds: 260),
+            curve: Curves.easeOutCubic,
+            builder: (context, v, _) => Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(width: 16),
+                Icon(Icons.folder_open, color: scheme.onPrimaryContainer),
+                Flexible(
+                  child: ClipRect(
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      widthFactor: v,
+                      child: Opacity(
+                        opacity: v,
+                        child: Padding(
+                          padding: const EdgeInsets.only(left: 10, right: 16),
+                          child: Text(
+                            'Import audio',
+                            maxLines: 1,
+                            softWrap: false,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                                fontWeight: FontWeight.w600,
+                                color: scheme.onPrimaryContainer),
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 ),
-              ),
-            ]),
+                // Collapsed: 16 + icon + 16 = 56 (the circle). Expanded: the
+                // label supplies its own 16 px right padding, so this spacer
+                // shrinks to zero and the pill ends right after the text.
+                SizedBox(width: 16 * (1 - v)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Gold counterpart to [_ImportFab]: watch one rewarded video and earn coins.
+/// Same expand-on-idle behaviour, only rendered on the Free plan.
+class _WatchAdFab extends StatelessWidget {
+  static const double _collapsed = 56;
+  final bool expanded;
+  final bool busy;
+  final VoidCallback onPressed;
+  const _WatchAdFab({
+    required this.expanded,
+    required this.busy,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: _collapsed,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [coinGoldLight, coinGold],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(_collapsed / 2),
+        boxShadow: const [
+          BoxShadow(
+              color: Color(0x40A97900), blurRadius: 8, offset: Offset(0, 3)),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: busy ? null : onPressed,
+          customBorder: const StadiumBorder(),
+          child: TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0, end: expanded ? 1 : 0),
+            duration: const Duration(milliseconds: 260),
+            curve: Curves.easeOutCubic,
+            builder: (context, v, _) => Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(width: 16),
+                busy
+                    ? const SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2.4, color: coinInk))
+                    : const Icon(Icons.smart_display_rounded, color: coinInk),
+                Flexible(
+                  child: ClipRect(
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      widthFactor: v,
+                      child: Opacity(
+                        opacity: v,
+                        child: Padding(
+                          padding: const EdgeInsets.only(left: 10, right: 16),
+                          child: Text(
+                            'Watch ad · +${CoinWallet.coinsPerAd}',
+                            maxLines: 1,
+                            softWrap: false,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontWeight: FontWeight.w700, color: coinInk),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                SizedBox(width: 16 * (1 - v)),
+              ],
+            ),
           ),
         ),
       ),
@@ -1660,7 +1848,7 @@ int _addWithinCap(List<Track> picked) {
 /// Free tier check before a picker/download starts. Returns true when the
 /// import is blocked, and shows the paywall so the refusal is never silent.
 bool paywallIfAtTrackCap(BuildContext? context, {String? reason}) {
-  final max = Entitlements.freeMaxTracks;
+  final max = Entitlements.I.maxTracks;
   if (Entitlements.I.importBlockReason(AppStore.I.tracks.length) == null) {
     return false;
   }

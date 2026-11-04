@@ -13,14 +13,12 @@
         android:name="${applicationName}"
         android:extractNativeLibs="true"
         android:icon="@mipmap/ic_launcher">
-        <!-- AdMob application id. The value below is Google's official sample
-             id, used so debug builds and internal-testing AABs run; the SDK
-             crashes on startup without this meta-data.
-             TODO(release): replace with the ReelTunes AdMob app id
-             (ca-app-pub-…~…) before the production submission. -->
+        <!-- AdMob application id for ReelTunes. Must match the account that
+             owns the ad units in lib/ad_config.dart, or every request fails
+             with "invalid request". -->
         <meta-data
             android:name="com.google.android.gms.ads.APPLICATION_ID"
-            android:value="ca-app-pub-3940256099942544~3347511713"/>
+            android:value="ca-app-pub-5837741403938321~1070877733"/>
         <activity
             android:name=".MainActivity"
             android:exported="true"

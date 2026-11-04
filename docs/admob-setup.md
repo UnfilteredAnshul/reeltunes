@@ -1,124 +1,99 @@
-# AdMob — switching from test ads to live ads
+# AdMob — live units, testing, and the pre-production checklist
 
-> Short version: the code is already wired. Live ads need **two ids that only
-> the AdMob account owner can create**: the app id and a banner unit id.
-> I can't log into your AdMob account, so send me those two strings and I'll
-> wire them and build.
+> Status (2026-11-04): **live ids are wired in.** The app id is in
+> `android/app/src/main/AndroidManifest.xml`; every unit id is in
+> `lib/ad_config.dart`. Debug builds request the live units by default so fill
+> can be verified on the device. Google's samples are one switch away.
 
 ---
 
-## 1. What is already in the code
+## 1. What is wired
 
-| Piece | Where | State |
+| Piece | Where | Unit |
 |---|---|---|
-| SDK | `google_mobile_ads` 9.2.0 | wired |
-| Init + UMP consent | `lib/ads.dart` → `Ads.I.init()` / `ensureConsent()` | wired |
-| Banner (slot B) | `lib/ads.dart` → `AdBanner` above `MiniBar` | wired, test unit |
-| Identifiers | `lib/ad_config.dart` | placeholders |
-| Manifest app id | `android/app/src/main/AndroidManifest.xml` | sample id + `TODO(release)` |
-| Privacy options row | Settings → Privacy → "Ad privacy choices" | wired |
-| Debug readout | Settings → Debug tiers → "Ads: unit in use" | wired |
+| SDK | `google_mobile_ads` 9.2.0 | — |
+| Init + UMP consent | `lib/ads.dart` → `Ads.I.init()` / `ensureConsent()` | — |
+| Sticky banner (slot B) | `AdBanner` above `MiniBar` | `…/1283639888` |
+| Playlist cards ×2 | `PlaylistAdCard` after the 8th/18th audio | `…/2022006489` |
+| Rewarded video | coin shop + gold "Watch ad" FAB | `…/4971428445` |
+| App-open | after the coin splash on cold start | `…/1962121722` |
+| Privacy options | Settings → Privacy → "Ad privacy choices" | — |
+| Debug readout | Settings → Debug tiers → "Ads: unit in use" | — |
 
-Debug builds **always** request Google's sample banner
-(`ca-app-pub-3940256099942544/6300978111`), so they are safe to tap. Live units
-only ever go into a **release** build.
+App id: `ca-app-pub-5837741403938321~1070877733`.
 
----
+**Two placements can share one ad unit.** AdMob pays per impression/click, not
+per unit id, so the two playlist cards request `…/2022006489` twice and earn the
+same as two identical units would. Separate units only split reporting.
 
-## 2. What only you can do (AdMob console)
+### Test vs live at runtime
 
-You can do this while the account is still being verified — app + ad-unit
-creation is available; payouts and some features unlock after verification.
-
-1. Open <https://apps.admob.com> and sign in.
-2. **Apps → Add app** (or *All apps → Add app*).
-   - Platform: **Android**.
-   - *Is the app listed on a supported app store?* → **No** for now
-     (ReelTunes is not published yet). You'll link the Play listing later in
-     *App settings*.
-   - App name: **ReelTunes**.
-3. Open the new app → **App settings** → copy the **App ID**:
-   `ca-app-pub-XXXXXXXXXXXXXXXX~YYYYYYYYYY`
-4. **Ad units → Add ad unit → Banner**.
-   - Name: `Home · anchored adaptive`.
-   - Keep the default (banner) format; anchored-adaptive sizing is requested
-     by the app, no special unit type is needed.
-   - Create → copy the **Ad unit ID**:
-     `ca-app-pub-XXXXXXXXXXXXXXXX/ZZZZZZZZZZ`
-5. **Payments**: add payment method, tax info and your address. Google mails a
-   **PIN** to verify the address before any payout (no fee). Ads can start
-   serving before that, but a brand-new unverified account often sees low fill
-   for a while.
-6. Leave the eCPM floor at 0 for now (see `docs/ads.md` §6).
-
-Those two ids are **not secret** (they ship inside every APK), so pasting them
-in chat is fine.
+- **Live is the default** in both debug and release.
+- **Settings → Debug tiers → "Use test ad units"** switches every placement to
+  Google's samples (`ca-app-pub-3940256099942544/…`), which are safe to tap.
+  The choice is persisted.
+- `--dart-define=ADMOB_TEST_ADS=true` forces samples from the build command.
+- **Never tap your own live ad.** Invalid traffic is permanent and can suspend
+  the account. Watching your own live rewarded ad to test coins is also invalid
+  traffic — use the test-unit switch for that.
 
 ---
 
-## 3. What happens once you send the ids
+## 2. What to expect on the device
 
-1. `lib/ad_config.dart` → real `appId` + `bannerUnit` become the release
-   defaults (debug still forces the sample unit).
-2. `AndroidManifest.xml` → `com.google.android.gms.ads.APPLICATION_ID` becomes
-   the real app id.
-3. I build a **release** APK (`flutter build apk --release`, still debug-signed
-   until the Play upload keystore exists) and install it. That build requests
-   the live unit.
-4. You keep testing day-to-day on the debug build (test ads, safe to tap);
-   the release build is only to confirm live fill.
+1. Install the debug APK, open Settings → Debug tiers → **Force Free** (or let
+   the trial end). Ads are hidden during the trial and for Pro.
+2. The sticky banner sits just above the mini bar, the two playlist cards are
+   after the 8th and 18th audio in list view, and a cold start can show the
+   app-open ad (max once per 4 h).
+3. The gold coin chip / shop icon appear beside search. Open the shop and tap
+   **Watch ad · +5 coins**. 4 videos = 20 coins = 24 h without ads.
+4. Coin shop purchases do **not** hide the shop/balance/watch-ad controls — only
+   Pro or the trial does. A purchase only pauses ads for 24 h.
+5. A brand-new unit can take **minutes to a couple of hours** for its first
+   impression, and fill stays low until the app is on Play **and**
+   `app-ads.txt` is verified. That is expected, not a code bug.
 
----
-
-## 4. Verifying live ads without risking the account
-
-- **Never tap your own live ad.** Invalid-traffic warnings are the one thing
-  that can suspend an AdMob account, and they are permanent.
-- A new ad unit can take **minutes to a couple of hours** for the first
-  impression. "No ad yet" in the first 10 minutes is normal.
-- Fill can stay near zero until the app is on Play **and** `app-ads.txt` is
-  verified. That is expected, not a code bug.
-- The banner only requests when `Entitlements.showAds` is true: Free plan,
-  after the trial. In debug use **Settings → Debug tiers → Force Free**.
-- The UMP consent form only appears where required (EEA/UK/CH) or when Google
-  decides it is; "Ad privacy choices" re-opens it on demand.
+If nothing fills, check in order: is the plan Free (`showAds`)? Is the test-unit
+switch off intentionally? Is the unit id from the **same AdMob account** as the
+manifest app id? Is a VPN / Private DNS / ad blocker active? Then wait an hour
+and look at AdMob → app → Ad units → requests/fill.
 
 ---
 
-## 5. Things that must exist before production (independent of the ids)
+## 3. Before production (deferred until after the ad test is approved)
 
-- **`app-ads.txt`** at the root of your developer website, verified in AdMob.
-  No website yet? A free GitHub Pages site works:
-  1. Create repo `<you>.github.io` (public), add a file `app-ads.txt`:
-     ```
-     google.com, pub-<your publisher id without ca-app-pub->, DIRECT, f08c47fec0942fa0
-     ```
-     Example publisher id `pub-1234567890123456` → that exact `pub-…` token.
-  2. Enable Pages for the repo.
-  3. Put `https://<you>.github.io` as the website on the Play listing.
-  4. AdMob → app → **app-ads.txt** → verify (can take hours, re-check after
-     publishing).
-- **Privacy policy** naming AdMob, the advertising ID (AAID), and how to reset
-  it (`Settings → Google → Ads`).
-- **Data Safety**: device or other IDs, app interactions, approximate location
-  (from IP), purpose *Advertising or marketing*, shared with Google.
-- **Play listing**: "Contains ads" = **Yes**; content rating **13+**, not
-  child-directed.
-- Keep the sample ad units local to debug — never ship a release that requests
-  `ca-app-pub-3940256099942544/…`.
+### app-ads.txt
+AdMob verifies it against the developer website on the Play listing.
+1. Create a public repo `<you>.github.io` with a root file `app-ads.txt`:
+   ```
+   google.com, pub-5837741403938321, DIRECT, f08c47fec0942fa0
+   ```
+2. Enable **GitHub Pages** for the repo.
+3. Put `https://<you>.github.io` as the website on the Play listing.
+4. AdMob → app → **app-ads.txt** → **Verify** (can take hours; re-check after
+   publishing).
+
+### Privacy policy
+Name AdMob, the advertising ID (AAID), the app-open/rewarded/banner formats,
+and how to reset the advertising ID (`Settings → Google → Ads`).
+
+### Data Safety
+- Device or other IDs (AAID)
+- App interactions / ad interactions
+- Approximate location (from IP)
+- Purpose: **Advertising or marketing**, shared with Google.
+
+### Play listing
+- "Contains ads" = **Yes**.
+- Content rating **13+**, not child-directed.
+- No sample units in a release build; the debug switch is debug-only.
 
 ---
 
-## 6. If live ads show nothing
+## 4. Coin economy caveat
 
-Check, in order:
-
-1. Is the build **release**? (debug intentionally uses the sample unit.)
-2. Does `AdConfig.modeLabel` say *Live ads* in Settings → Debug tiers?
-   (That section is stored in the debug build; a release build shows the ad if
-   the ids are right.)
-3. Manifest app id = the same AdMob account as the unit id? A mismatch causes
-   `Invalid request` / no fill.
-4. Is the plan Free? Force Free, or end the trial.
-5. Network/ad-blocker on the phone (Private DNS, VPN, AdAway).
-6. Wait an hour, then check AdMob → app → **Ad units** for request/fill counts.
+The wallet in `lib/coins.dart` is **local** until AdMob SSV + the Cloudflare
+Worker exist. The local ledger is fine for testing and for a first release, but
+a production balance that costs real money should be server-verified; see
+`docs/free-vs-pro.md` §3.

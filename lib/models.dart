@@ -520,13 +520,13 @@ class AppStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Ids a Free plan is allowed to see: the newest [Entitlements.freeMaxTracks]
+  /// Ids a Free plan is allowed to see: the newest [Entitlements.maxTracks]
   /// audios. Returns null when there is no cap (Pro, or the library fits).
   ///
   /// The extra files are neither deleted nor removed from `tracks` — they stay
-  /// on the phone and reappear the moment the user upgrades.
+  /// on the phone and reappear the moment the user upgrades or buys slots.
   Set<String>? _freeCapIds() {
-    final max = Entitlements.freeMaxTracks;
+    final max = Entitlements.I.maxTracks;
     if (Entitlements.I.isPro || tracks.length <= max) return null;
     final indexes = List<int>.generate(tracks.length, (i) => i);
     indexes.sort((a, b) {
@@ -540,7 +540,7 @@ class AppStore extends ChangeNotifier {
 
   /// How many audios exist but are hidden by the Free cap (0 when Pro/under).
   int get hiddenByFreeCap {
-    final max = Entitlements.freeMaxTracks;
+    final max = Entitlements.I.maxTracks;
     if (Entitlements.I.isPro || tracks.length <= max) return 0;
     return tracks.length - max;
   }
@@ -601,7 +601,9 @@ class AppStore extends ChangeNotifier {
   /// date filter). Only the matching tracks are resequenced; everything else
   /// keeps its place in the store.
   void reorderVisibleTracks(int oldIndex, int newIndex) {
-    final visible = _baseVisible();
+    // Display order, not raw store order: drag indices come from the sorted
+    // list (a playlist ad row is already mapped out by the caller).
+    final visible = visibleTracksSorted;
     if (oldIndex < 0 || oldIndex >= visible.length) return;
     newIndex =
         (newIndex > oldIndex ? newIndex - 1 : newIndex).clamp(0, visible.length);

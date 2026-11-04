@@ -6,6 +6,7 @@ import 'package:receive_intent/receive_intent.dart' as ri;
 
 import 'ads.dart';
 import 'billing.dart';
+import 'coins.dart';
 import 'entitlements.dart';
 import 'error_report.dart';
 import 'library.dart';
@@ -88,6 +89,7 @@ class _RootScreenState extends State<RootScreen>
         // Promo codes read the plan, so they load after entitlements without
         // holding up the other two.
         Entitlements.I.init().then((_) => PromoEngine.I.init()),
+        CoinWallet.I.init(),
         Future.delayed(minSplash), // coin must be visible, even briefly
       ]);
       // Load the audios folder grant, restore a mirror after a reinstall and
@@ -109,6 +111,9 @@ class _RootScreenState extends State<RootScreen>
         );
       }
       if (mounted) setState(() => ready = true);
+      // App-open ad (Free only, max once per 4 h). It waits briefly for the
+      // preloaded unit and silently gives up when there is no fill.
+      unawaited(Ads.I.maybeShowAppOpen());
       // The store check runs after the library is on screen: a slow Play
       // connection must never hold up the splash. It corrects the plan (and
       // therefore the caps and ads) as soon as it answers.

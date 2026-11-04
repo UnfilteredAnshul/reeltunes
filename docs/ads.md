@@ -4,6 +4,27 @@
 > Every ad in this plan is **outside the playback path**: no ad ever interrupts
 > audio, sits on the player, or blocks a download that is still running.
 
+## 0. Live configuration (2026-11-04)
+
+All four units are created in the ReelTunes AdMob account and wired in
+`lib/ad_config.dart`; the app id is in `AndroidManifest.xml`.
+
+| Placement | Format | Unit |
+|---|---|---|
+| Sticky above the mini bar | anchored adaptive banner | `…/1283639888` |
+| Playlist, after the 8th + 18th audio | banner card (same unit twice) | `…/2022006489` |
+| Coin shop / gold "Watch ad" FAB | rewarded video | `…/4971428445` |
+| Cold start (after the coin splash) | app-open | `…/1962121722` |
+
+**Duplicating one unit twice in a list is allowed and earns the same** — AdMob
+pays per impression/click, not per unit id. Separate units are only useful for
+separate reporting rows. Keep the two playlist placements on the same unit.
+
+Debug builds request the **live** units by default so fill can be verified; the
+safety switch is **Settings → Debug tiers → Use test ad units** (or
+`--dart-define=ADMOB_TEST_ADS=true`). Never tap your own live ad: invalid
+traffic is the one thing that can suspend an AdMob account.
+
 ---
 
 ## 1. Which network to use

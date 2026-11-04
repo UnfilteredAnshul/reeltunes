@@ -1,55 +1,95 @@
-// AdMob identifiers live here so switching from test ads to live ads is a
-// two-line edit (plus the application id in AndroidManifest.xml).
+// AdMob identifiers live here so switching between test ads and live ads is a
+// single switch. Every unit below was created in the ReelTunes AdMob account.
 //
-// Debug builds ALWAYS request Google's sample banner. Live units only ever
-// serve from a release build — clicking your own live ad can get the AdMob
-// account suspended, and a debug build is exactly where you'd tap it.
+// AdMob console → Apps → ReelTunes → App settings → "App ID"       → appId
+// AdMob console → Apps → ReelTunes → Ad units → <format> → unit id → *Unit
 //
-// AdMob console → Apps → <app> → App settings → "App ID"        → appId
-// AdMob console → Apps → <app> → Ad units → Banner → unit id     → bannerUnit
+// Live ads are the default in debug too, because the whole point of the
+// current build is to prove that real fill arrives. Tapping your own live ad
+// can get an AdMob account suspended, so the debug build also offers
+// Settings → Debug tiers → "Use test ad units" (Google's samples, safe to tap)
+// and honours `--dart-define=ADMOB_TEST_ADS=true`.
 
 import 'package:flutter/foundation.dart';
 
 class AdConfig {
   AdConfig._();
 
-  /// Google's official sample ids. Safe to tap.
+  // ---- live units (ReelTunes) ------------------------------------------
+  static const String liveAppId = 'ca-app-pub-5837741403938321~1070877733';
+
+  /// Sticky banner above the mini bar (home screen).
+  static const String liveBannerUnit =
+      'ca-app-pub-5837741403938321/1283639888';
+
+  /// Rewarded video: watch → earn coins (coin shop / earn button).
+  static const String liveRewardedUnit =
+      'ca-app-pub-5837741403938321/4971428445';
+
+  /// App-open ad: shown instead of a blank moment at cold start.
+  static const String liveAppOpenUnit =
+      'ca-app-pub-5837741403938321/1962121722';
+
+  /// In-list banner for the playlist (used for both placements).
+  static const String livePlaylistUnit =
+      'ca-app-pub-5837741403938321/2022006489';
+
+  // ---- Google's official samples (safe to tap) -------------------------
   static const String testAppId = 'ca-app-pub-3940256099942544~3347511713';
   static const String testBannerUnit =
       'ca-app-pub-3940256099942544/6300978111';
+  static const String testRewardedUnit =
+      'ca-app-pub-3940256099942544/5224354917';
+  static const String testAppOpenUnit =
+      'ca-app-pub-3940256099942544/9257395921';
 
-  /// Real app id. Also must be set in `AndroidManifest.xml` — the SDK reads it
-  /// from there and crashes on startup if it is missing.
-  /// TODO(live ads): paste the AdMob app id.
+  /// The in-list placement uses a normal banner request, so Google's sample
+  /// banner is the safe stand-in.
+  static const String testPlaylistUnit = testBannerUnit;
+
+  /// Forced from the build command: `flutter build … --dart-define=ADMOB_TEST_ADS=true`.
+  static const bool _forcedTest = bool.fromEnvironment('ADMOB_TEST_ADS');
+
+  /// Runtime debug switch (Settings → Debug tiers), persisted by `Ads`.
+  static bool _debugTest = false;
+
+  static void setDebugTestAds(bool v) => _debugTest = v;
+
+  /// True = Google's samples. Never true in a release build unless forced.
+  static bool get useTestAds => _forcedTest || (kDebugMode && _debugTest);
+
+  /// Real app id. Must also be set in `AndroidManifest.xml`: the SDK reads it
+  /// from there and crashes on startup if it is missing. Kept as a build
+  /// override so a different AdMob account can be used without code edits.
   static const String appId = String.fromEnvironment(
     'ADMOB_APP_ID',
-    defaultValue: testAppId,
+    defaultValue: liveAppId,
   );
 
-  /// Real banner unit.
-  /// TODO(live ads): paste the AdMob banner unit id.
-  static const String bannerUnit = String.fromEnvironment(
-    'ADMOB_BANNER_UNIT',
-    defaultValue: testBannerUnit,
-  );
+  static String get bannerUnitId =>
+      useTestAds ? testBannerUnit : liveBannerUnit;
+  static String get rewardedUnitId =>
+      useTestAds ? testRewardedUnit : liveRewardedUnit;
+  static String get appOpenUnitId =>
+      useTestAds ? testAppOpenUnit : liveAppOpenUnit;
 
-  /// Debug = sample ads, release = whatever is configured above.
-  static bool get useTestAds => kDebugMode;
+  /// Both in-list placements request this same unit. AdMob counts impressions
+  /// per request, so duplicating a unit is allowed and pays the same; separate
+  /// units would only give separate reporting rows.
+  static String get playlistUnitId =>
+      useTestAds ? testPlaylistUnit : livePlaylistUnit;
 
-  static String get bannerUnitId => useTestAds ? testBannerUnit : bannerUnit;
-
-  /// True only when a release build actually has a live unit configured.
-  static bool get bannerIsLive => !useTestAds && bannerUnit != testBannerUnit;
+  /// True only when a real, revenue-earning unit is configured.
+  static bool get bannerIsLive => !useTestAds;
 
   /// Human-readable state, surfaced in the debug tier section.
-  static String get modeLabel => useTestAds
-      ? 'Test ads (debug build)'
-      : bannerIsLive
-          ? 'Live ads · $bannerUnit'
-          : 'Sample unit — no live id configured yet';
+  static String get modeLabel {
+    if (useTestAds) {
+      return 'Test ads · Google samples (safe to tap)';
+    }
+    return 'Live ads · banner, rewarded, app-open, playlist';
+  }
 
-  /// True when the Dart side and the manifest disagree (a common cause of
-  /// "no ads fill"): the manifest still points at the sample app id.
-  static bool get appIdMismatch =>
-      !useTestAds && bannerIsLive && appId == testAppId;
+  /// True when the Dart app id and the manifest app id could disagree.
+  static bool get appIdMismatch => !useTestAds && appId != liveAppId;
 }
