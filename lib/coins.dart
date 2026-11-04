@@ -272,6 +272,22 @@ class CoinWallet extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Debug only: set the balance to an exact value.
+  Future<void> setBalance(int value) async {
+    if (value < 0) return;
+    _balance = value;
+    await _prefs?.setInt('coinBalance', _balance);
+    notifyListeners();
+  }
+
+  /// Debug only: remove a single perk by id.
+  Future<void> removePerk(String id) async {
+    _perkExpiry.remove(id);
+    await _prefs?.remove('coinPerk_$id');
+    _scheduleExpiry();
+    notifyListeners();
+  }
+
   /// Loads the wallet. Safe to call once at startup; later calls are no-ops.
   Future<void> init() async {
     final p = await SharedPreferences.getInstance();

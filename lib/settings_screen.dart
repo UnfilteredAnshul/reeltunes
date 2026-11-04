@@ -16,6 +16,7 @@ import 'library_sync.dart';
 import 'models.dart';
 import 'promo.dart';
 import 'redeem_sheet.dart';
+import 'shop_sheet.dart';
 import 'sheets.dart';
 import 'top_toast.dart';
 
@@ -391,11 +392,72 @@ class _ThemeRadio extends StatelessWidget {
 
 /// Debug-only tier controls so both plans are testable without waiting out the
 /// 7-day trial or going through Play Billing. Stripped from release builds.
-class _DebugTierSection extends StatelessWidget {
+class _DebugTierSection extends StatefulWidget {
+  const _DebugTierSection();
+
+  @override
+  State<_DebugTierSection> createState() => _DebugTierSectionState();
+}
+
+class _DebugTierSectionState extends State<_DebugTierSection> {
+  final _coinCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _coinCtrl.dispose();
+    super.dispose();
+  }
+
+  static String _when(DateTime? d) {
+    if (d == null) return 'never';
+    final h = d.hour.toString().padLeft(2, '0');
+    final m = d.minute.toString().padLeft(2, '0');
+    return '${d.day}/${d.month} · $h:$m';
+  }
+
+  List<Widget> _activePerks(BuildContext context) {
+    final coins = CoinWallet.I;
+    final out = <Widget>[];
+    for (final p in CoinWallet.perks) {
+      if (!coins.isPerkActive(p.id)) continue;
+      out.add(
+        ListTile(
+          leading: Icon(p.icon, color: coinGold, size: 20),
+          title: Text(p.title),
+          subtitle: Text('Active until ${_when(coins.perkUntil(p.id))}'),
+          trailing: IconButton(
+            icon: const Icon(Icons.delete_outline, size: 18),
+            tooltip: 'Remove perk',
+            onPressed: () async {
+              await coins.removePerk(p.id);
+              if (!mounted) return;
+              showTopToast(context, '${p.title} removed');
+            },
+          ),
+        ),
+      );
+    }
+    return out;
+  }
+
+  Future<void> _setCustomCoins() async {
+    final coins = CoinWallet.I;
+    final v = int.tryParse(_coinCtrl.text.trim());
+    if (v == null) {
+      showTopToast(context, 'Enter a whole number', error: true);
+      return;
+    }
+    await coins.setBalance(v);
+    _coinCtrl.clear();
+    if (!mounted) return;
+    showTopToast(context, 'Coins set to $v');
+  }
+
   @override
   Widget build(BuildContext context) {
     final e = Entitlements.I;
     final coins = CoinWallet.I;
+    final active = _activePerks(context);
     return ListenableBuilder(
       listenable: Listenable.merge([e, coins, Ads.I]),
       builder: (context, _) => Column(children: [
@@ -440,6 +502,7 @@ class _DebugTierSection extends StatelessWidget {
           },
         ),
         const Divider(height: 1),
+        const _Section('Debug · coins'),
         ListTile(
           leading: const Icon(Icons.monetization_on_outlined),
           title: Text('Coins: ${coins.balance}'),
@@ -475,6 +538,41 @@ class _DebugTierSection extends StatelessWidget {
             ),
           ),
         ]),
+        // Set a custom coin balance.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+          child: TextField(
+            controller: _coinCtrl,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(
+              labelText: 'Set coins to (debug)',
+              border: OutlineInputBorder(),
+              prefixText: '₹0 → ',
+              helperText: 'Any whole number. Overwrites the current balance.',
+            ),
+            onSubmitted: (_) => _setCustomCoins(),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton.icon(
+            onPressed: _setCustomCoins,
+            icon: const Icon(Icons.done),
+            label: const Text('Set'),
+          ),
+        ),
+        const Divider(height: 1),
+        // Active perks: list each one with its expiry and a delete button.
+        const _Section('Debug · active perks'),
+        if (active.isEmpty)
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 8, 16, 12),
+            child: Text('No perks active',
+                style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic)),
+          )
+        else
+          ...active,
         const Divider(height: 1),
         SwitchListTile(
           title: const Text('Use test ad units'),
