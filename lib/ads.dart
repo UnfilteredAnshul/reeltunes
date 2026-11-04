@@ -36,6 +36,12 @@ class Ads extends ChangeNotifier {
   RewardedAd? _rewarded;
   bool _rewardedLoading = false;
 
+  /// Preloaded playlist banner ads, kept warm so an impression is never missed
+  /// because the user scrolled past before the ad finished loading.
+  final List<BannerAd> _playlistAds = [];
+  bool _playlistLoading = false;
+  static const int _playlistTarget = 2;
+
   /// The SDK finished initializing; banner requests can be made.
   bool get ready => _ready;
 
@@ -64,7 +70,23 @@ class Ads extends ChangeNotifier {
       if (!Entitlements.I.showAds) return;
       unawaited(preloadRewarded());
       unawaited(preloadAppOpen());
+      unawaited(preloadPlaylistAds());
     }));
+    // If ads are ever disabled (Pro, trial, coin-shop no-ads window), drop any
+    // preloaded playlist banners so they don't sit idle in memory.
+    Entitlements.I.addListener(_onAdsGateChanged);
+  }
+
+  void _onAdsGateChanged() {
+    if (!Entitlements.I.showAds) {
+      for (final a in _playlistAds) {
+        a.dispose();
+      }
+      _playlistAds.clear();
+      _playlistLoading = false;
+    } else {
+      unawaited(preloadPlaylistAds());
+    }
   }
 
   /// Debug-only switch used by Settings → Debug tiers. Persisted so the choice
@@ -78,10 +100,82 @@ class Ads extends ChangeNotifier {
     _rewarded = null;
     _appOpen?.dispose();
     _appOpen = null;
+    for (final a in _playlistAds) {
+      a.dispose();
+    }
+    _playlistAds.clear();
+    _playlistLoading = false;
     notifyListeners();
     if (!v) {
       unawaited(preloadRewarded());
       unawaited(preloadAppOpen());
+      unawaited(preloadPlaylistAds());
+    }
+  }
+
+  /// Fills the playlist banner pool up to [_playlistTarget]. Safe to call
+  /// repeatedly — it only loads while the pool isn't full and no load is in
+  /// flight.
+  Future<void> preloadPlaylistAds() async {
+    if (!Entitlements.I.showAds) return;
+    while (_playlistAds.length < _playlistTarget && !_playlistLoading) {
+      _playlistLoading = true;
+      try {
+        final ad = BannerAd(
+          adUnitId: AdConfig.playlistUnitId,
+          size: AdSize.banner,
+          request: const AdRequest(),
+          listener: BannerAdListener(
+            onAdLoaded: (a) {
+              _playlistAds.add(a as BannerAd);
+              _playlistLoading = false;
+              // Keep the pool topped up.
+              if (_playlistAds.length < _playlistTarget) {
+                unawaited(preloadPlaylistAds());
+              }
+            },
+            onAdFailedToLoad: (a, error) {
+              a.dispose();
+              _playlistLoading = false;
+              debugPrint(
+                  'playlist banner preload failed: ${error.message}');
+              unawaited(
+                  _retryPlaylistAfter(const Duration(seconds: 30)));
+            },
+          ),
+        );
+        await ad.load();
+        // onAdLoaded should fire during load(); if it hasn't yet, add the ad
+        // now so the pool doesn't stall.
+        if (!_playlistAds.contains(ad)) {
+          _playlistAds.add(ad);
+          _playlistLoading = false;
+          if (_playlistAds.length < _playlistTarget) {
+            unawaited(preloadPlaylistAds());
+          }
+        }
+      } catch (e) {
+        _playlistLoading = false;
+        debugPrint('playlist banner setup failed: $e');
+        unawaited(_retryPlaylistAfter(const Duration(seconds: 30)));
+      }
+    }
+  }
+
+  /// Takes one preloaded playlist banner from the pool and triggers a refill.
+  /// Returns null when the pool is empty (caller falls back to on-demand load
+  /// or shows nothing).
+  BannerAd? takePlaylistAd() {
+    if (_playlistAds.isEmpty) return null;
+    final ad = _playlistAds.removeAt(0);
+    unawaited(preloadPlaylistAds());
+    return ad;
+  }
+
+  Future<void> _retryPlaylistAfter(Duration d) async {
+    await Future.delayed(d);
+    if (Entitlements.I.showAds) {
+      unawaited(preloadPlaylistAds());
     }
   }
 
@@ -313,20 +407,52 @@ class AdBanner extends StatelessWidget {
 /// The playlist placement: an in-list ad card rendered after the 8th and 18th
 /// audio. Both placements request the same unit — AdMob pays per impression,
 /// so duplicating the unit is allowed (separate units only split reporting).
-class PlaylistAdCard extends StatelessWidget {
+///
+/// A playlist banner is preloaded via [`Ads.takePlaylistAd`] so it is ready the
+/// instant the card scrolls into view. Without preloading, fast scrolling would
+/// skip the placement before `BannerAd.load()` finishes, losing the impression.
+class PlaylistAdCard extends StatefulWidget {
   const PlaylistAdCard({super.key});
+
+  @override
+  State<PlaylistAdCard> createState() => _PlaylistAdCardState();
+}
+
+class _PlaylistAdCardState extends State<PlaylistAdCard> {
+  BannerAd? _preloaded;
+
+  @override
+  void initState() {
+    super.initState();
+    if (Entitlements.I.showAds) {
+      _preloaded = Ads.I.takePlaylistAd();
+    }
+  }
+
+  @override
+  void dispose() {
+    // If we took a preloaded ad but the card was removed before it was ever
+    // displayed, dispose it so it doesn't leak.
+    _preloaded?.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
       listenable: Listenable.merge([Entitlements.I, Ads.I]),
       builder: (context, _) {
-        if (!Entitlements.I.showAds) return const SizedBox.shrink();
+        if (!Entitlements.I.showAds) {
+          _preloaded?.dispose();
+          _preloaded = null;
+          return const SizedBox.shrink();
+        }
         return _BannerFrame(
           key: ValueKey('playlist-${AdConfig.useTestAds}'),
           unitId: AdConfig.playlistUnitId,
           adaptive: false,
           inline: true,
+          preloadedAd: _preloaded,
         );
       },
     );
@@ -337,11 +463,15 @@ class _BannerFrame extends StatefulWidget {
   final String unitId;
   final bool adaptive;
   final bool inline;
+  /// A preloaded banner ad to show immediately (playlist placement). When null,
+  /// the frame loads on demand.
+  final BannerAd? preloadedAd;
   const _BannerFrame({
     super.key,
     required this.unitId,
     this.adaptive = false,
     this.inline = false,
+    this.preloadedAd,
   });
 
   @override
@@ -360,9 +490,27 @@ class _BannerFrameState extends State<_BannerFrame> {
   static const double _gap = 8;
 
   @override
+  void initState() {
+    super.initState();
+    // Playlist placement with a preloaded ad: show it immediately, no load
+    // wait. Without a preload, fall through to on-demand loading below.
+    if (widget.inline && widget.preloadedAd != null) {
+      _ad = widget.preloadedAd;
+      _visible = true;
+    }
+  }
+
+  @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (_ad == null && !_loading && _attempt == 0) _load();
+    // Sticky banner (non-inline) loads on demand when it enters the tree.
+    // Inline playlist without a preload also loads on demand as a fallback.
+    if (_ad == null && !_loading && _attempt == 0 && !widget.inline) {
+      _load();
+    }
+    if (widget.inline && _ad == null && !_loading && _attempt == 0) {
+      _load();
+    }
   }
 
   @override
