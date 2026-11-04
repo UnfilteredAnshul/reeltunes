@@ -9,7 +9,7 @@
 // Two build-time inputs, both `--dart-define` so no secret is committed:
 //   RC_ANDROID_KEY   the public Android SDK key from the RevenueCat dashboard
 //                    (`goog_...`; it is safe to ship, unlike a server key)
-//   RC_ENTITLEMENT   entitlement identifier, default "pro"
+//   RC_ENTITLEMENT   entitlement identifier, default "reeltunes_pro"
 //
 // Without RC_ANDROID_KEY the app simply has no store: the paywall falls back to
 // the debug shortcut in a debug build, and to a "not live yet" toast in release.
@@ -65,7 +65,7 @@ class Billing {
 
   /// Must match the entitlement identifier in the RevenueCat dashboard.
   static const String entitlementId =
-      String.fromEnvironment('RC_ENTITLEMENT', defaultValue: 'pro');
+      String.fromEnvironment('RC_ENTITLEMENT', defaultValue: 'reeltunes_pro');
 
   /// Play's own subscription page: the only legitimate way to cancel, and the
   /// wording Play requires apps to point at.
