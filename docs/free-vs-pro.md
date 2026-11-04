@@ -341,3 +341,54 @@ Codes, creator programs and the admin dashboard are specified in
 5. **RevenueCat product IDs** — confirm `reeltunes_pro_monthly` /
    `reeltunes_pro_annual` before they are created in Play Console (they are
    permanent).
+
+## 12. Testing RevenueCat subscriptions + receipt email
+
+### 12.1 Prerequisites (one-time setup)
+
+1. **RevenueCat dashboard:** create an app, add Android platform, copy the
+   public SDK key (`goog_...`).
+2. **Play Console:** create subscription products
+   `reeltunes_pro_monthly` and `reeltunes_pro_annual` with a 7-day free trial
+   offer. Add your Google account as a **license tester** (Settings → License
+   testing).
+3. **RevenueCat dashboard:** create entitlement `pro`, offering `default`,
+   packages `$rc_monthly` / `$rc_annual`, link the Play products, upload the
+   Play service-account JSON.
+4. **Resend account:** create an API key, verify a sending domain.
+5. **Cloudflare Worker:** deploy `worker/receipt-email/` (`wrangler deploy`,
+   `wrangler secret put RESEND_API_KEY`), note the worker URL.
+
+### 12.2 Build for testing
+
+```powershell
+flutter build apk --debug --dart-define RC_ANDROID_KEY=goog_… --dart-define RECEIPT_EMAIL_ENDPOINT=https://<your-worker>.workers.dev
+```
+
+Install on the device. Open Settings → Debug tiers → **Receipt email (debug)**
+and enter your email address. The receipt endpoint URL comes from the build
+define, so it's set once per build.
+
+### 12.3 Test purchase flow
+
+1. Force Free tier (Settings → Debug tiers → Force Free).
+2. Open the paywall (Settings → ReelTunes Pro → Get Pro, or tap Add reel at
+   25 audios).
+3. Choose Monthly or Annual, tap buy.
+4. Google Play test purchase flow runs (license testers are not charged).
+5. After success: the entitlement flips to Pro immediately, and a receipt
+   email is sent to your address via Resend (check inbox + spam).
+6. Tap **Restore purchases** on a reinstall — the entitlement comes back from
+   RevenueCat/Play.
+
+### 12.4 What the receipt email contains
+
+- Plan (monthly / annual)
+- Amount charged
+- Purchase date
+- Expiration / renewal date
+- Your email address
+
+The email is fire-and-forget: if the Resend endpoint is down, the purchase
+still succeeds — the email is just skipped.
+
