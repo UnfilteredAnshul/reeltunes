@@ -1,0 +1,9 @@
+name = "reeltunes-receipt-email"
+main = "index.js"
+compatibility_date = "2026-11-05"
+
+[vars]
+FROM_EMAIL = "ReelTunes <receipts@yourdomain.com>"
+
+[observability]
+enabled = true

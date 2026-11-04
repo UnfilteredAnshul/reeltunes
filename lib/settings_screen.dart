@@ -19,6 +19,7 @@ import 'redeem_sheet.dart';
 import 'shop_sheet.dart';
 import 'sheets.dart';
 import 'top_toast.dart';
+import 'receipt_email.dart';
 
 /// Where bug reports and suggestions go (mail app handoff, no server).
 const feedbackEmail = 'contact.unfiltered.anshul@gmail.com';
@@ -401,10 +402,12 @@ class _DebugTierSection extends StatefulWidget {
 
 class _DebugTierSectionState extends State<_DebugTierSection> {
   final _coinCtrl = TextEditingController();
+  final _emailCtrl = TextEditingController();
 
   @override
   void dispose() {
     _coinCtrl.dispose();
+    _emailCtrl.dispose();
     super.dispose();
   }
 
@@ -451,6 +454,18 @@ class _DebugTierSectionState extends State<_DebugTierSection> {
     _coinCtrl.clear();
     if (!mounted) return;
     showTopToast(context, 'Coins set to $v');
+  }
+
+  Future<void> _setEmail() async {
+    final email = _emailCtrl.text.trim();
+    if (email.isEmpty || !email.contains('@')) {
+      showTopToast(context, 'Enter a valid email address', error: true);
+      return;
+    }
+    ReceiptEmail.I.setEmail(email);
+    _emailCtrl.clear();
+    if (!mounted) return;
+    showTopToast(context, 'Receipt email saved');
   }
 
   @override
@@ -560,6 +575,31 @@ class _DebugTierSectionState extends State<_DebugTierSection> {
             onPressed: _setCustomCoins,
             icon: const Icon(Icons.done),
             label: const Text('Set'),
+          ),
+        ),
+        const Divider(height: 1),
+        // Email for receipt delivery (Resend-backed endpoint).
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+          child: TextField(
+            controller: _emailCtrl,
+            keyboardType: TextInputType.emailAddress,
+            decoration: const InputDecoration(
+              labelText: 'Receipt email (debug)',
+              border: OutlineInputBorder(),
+              prefixIcon: Icon(Icons.email),
+              helperText: 'Enter your email to receive the Pro purchase receipt.',
+            ),
+            onSubmitted: (_) => _setEmail(),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton.icon(
+            onPressed: _setEmail,
+            icon: const Icon(Icons.done),
+            label: const Text('Save'),
           ),
         ),
         const Divider(height: 1),

@@ -2,6 +2,8 @@
 
 import 'dart:math';
 
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -17,6 +19,7 @@ import 'models.dart';
 import 'player.dart';
 import 'top_toast.dart';
 import 'ads.dart';
+import 'receipt_email.dart';
 
 // ---------------------------------------------------------------------------
 // Add reel / extraction intake
@@ -1343,6 +1346,18 @@ class _PaywallSheetState extends State<_PaywallSheet> {
       final report = await Billing.I.purchasePlan(plan);
       if (!mounted) return;
       if (report.ok) {
+        // Send receipt email (Resend-backed endpoint). Never blocks the purchase.
+        final e = Entitlements.I;
+        if (ReceiptEmail.I.configured) {
+          final receipt = PurchaseReceipt(
+            productId: e.productId ?? plan,
+            priceString: Billing.I.planView(plan)?.priceString ?? '',
+            purchasedAt: DateTime.now(),
+            customerEmail: ReceiptEmail.I.email!,
+            expirationDate: e.subscriptionEndsAt,
+          );
+          unawaited(ReceiptEmail.I.send(receipt));
+        }
         Navigator.pop(context);
         if (context.mounted) showTopToast(context, 'Welcome to Pro · no ads');
       } else if (report.outcome == PurchaseOutcome.pending) {
