@@ -1023,12 +1023,6 @@ class _PlayerSheetState extends State<PlayerSheet> {
                   scrollDirection: Axis.horizontal,
                   children: [
                     _LoopChip(
-                      label: 'Play once',
-                      selected: player.loop == RtLoop.off,
-                      onTap: () => player.setLoop(RtLoop.off),
-                    ),
-                    const SizedBox(width: 4),
-                    _LoopChip(
                       label: '✨ Smart (auto)',
                       selected: player.loop == RtLoop.smart,
                       // Tapping the active mode switches looping off, so the
@@ -1059,6 +1053,17 @@ class _PlayerSheetState extends State<PlayerSheet> {
                   ],
                 ),
               ),
+              if (player.loop == RtLoop.off)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(
+                    'No loop · plays once, then the next audio',
+                    style: Theme.of(context)
+                        .textTheme
+                        .labelSmall
+                        ?.copyWith(color: scheme.onSurfaceVariant),
+                  ),
+                ),
               const SizedBox(height: 12),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,

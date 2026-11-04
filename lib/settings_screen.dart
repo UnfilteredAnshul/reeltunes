@@ -375,6 +375,13 @@ class _DebugTierSection extends StatelessWidget {
           value: e.debugPro,
           onChanged: (v) => e.setDebugPro(v),
         ),
+        SwitchListTile(
+          title: const Text('Force Free'),
+          subtitle: const Text(
+              'Caps, ads flag and paywalls — wins over a purchase, code or live trial'),
+          value: e.debugFree,
+          onChanged: (v) => e.setDebugFree(v),
+        ),
         ListTile(
           leading: const Icon(Icons.timer_outlined),
           title: const Text('Trial: jump to the last day'),

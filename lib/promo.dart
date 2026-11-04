@@ -234,6 +234,7 @@ class PromoEngine extends ChangeNotifier {
       if (!kDebugMode) return PromoResult.fail("That code isn't valid");
       await Entitlements.I.setPurchased(false);
       await Entitlements.I.setDebugPro(false);
+      await Entitlements.I.setDebugFree(false);
       await Entitlements.I.clearCodeGrant();
       // Also retire the trial, otherwise "Free" would still behave as Pro for
       // the rest of the week and the caps/ads could not be tested at all.

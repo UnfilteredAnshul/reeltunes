@@ -32,6 +32,10 @@ class Entitlements extends ChangeNotifier {
   DateTime? _subscriptionEndsAt;
   String? _productId;
   bool _debugPro = false;
+  /// Debug only: force the Free plan even when a purchase, code grant or the
+  /// trial would otherwise make the app Pro. Without this, "Force Pro off" and
+  /// "end trial" appear to do nothing on a device that redeemed a Pro code.
+  bool _debugFree = false;
 
   /// Pro time granted by a promo/creator code (`lib/promo.dart`). Kept
   /// separate from the store fields on purpose: a code grant must never look
@@ -61,6 +65,7 @@ class Entitlements extends ChangeNotifier {
     }
     _productId = prefs.getString('proProductId');
     _debugPro = prefs.getBool('debugPro') ?? false;
+    _debugFree = prefs.getBool('debugFree') ?? false;
     _grantLifetime = prefs.getBool('grantLifetime') ?? false;
     final grantMs = prefs.getInt('grantUntilMs');
     if (grantMs != null && grantMs > 0) {
@@ -135,6 +140,9 @@ class Entitlements extends ChangeNotifier {
 
   bool get debugPro => _debugPro;
 
+  /// Debug only: Free is forced, regardless of purchase / code / trial.
+  bool get debugFree => _debugFree;
+
   /// True when the active subscription is still in its Play introductory
   /// (free-trial) phase.
   bool get billingTrial => purchased && _billingTrial;
@@ -161,7 +169,8 @@ class Entitlements extends ChangeNotifier {
 
   bool get codeGrantLifetime => codeGrantActive && _grantLifetime;
 
-  bool get isPro => purchased || _debugPro || codeGrantActive || trialActive;
+  bool get isPro =>
+      !_debugFree && (purchased || _debugPro || codeGrantActive || trialActive);
 
   /// The end a new code should extend from: an active grant, else now.
   DateTime get codeGrantBase {
@@ -344,7 +353,19 @@ class Entitlements extends ChangeNotifier {
   Future<void> setDebugPro(bool v) async {
     if (!kDebugMode) return;
     _debugPro = v;
+    if (v) _debugFree = false;
     await _prefs?.setBool('debugPro', v);
+    await _prefs?.setBool('debugFree', _debugFree);
+    _changed();
+  }
+
+  /// Debug only: force Free even over a purchase, code grant or live trial.
+  Future<void> setDebugFree(bool v) async {
+    if (!kDebugMode) return;
+    _debugFree = v;
+    if (v) _debugPro = false;
+    await _prefs?.setBool('debugFree', v);
+    await _prefs?.setBool('debugPro', _debugPro);
     _changed();
   }
 
@@ -380,6 +401,7 @@ class Entitlements extends ChangeNotifier {
 
   /// Shown in Settings and on the paywall.
   String get statusLabel {
+    if (_debugFree) return 'Free (debug)';
     if (purchased) {
       if (billingTrial) {
         final end = _subscriptionEndsAt;

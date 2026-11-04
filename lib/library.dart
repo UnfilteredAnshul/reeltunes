@@ -177,15 +177,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
                     ],
                   ),
                 ),
-          // Always visible: it keeps the current track one tap away and is the
-          // anchor the free-tier ad strip will sit directly above. With nothing
-          // playing it renders an idle state instead of disappearing.
-          bottomNavigationBar: MiniBar(
-            track: RtPlayer.I.current,
-            onTap: RtPlayer.I.current == null
-                ? null
-                : () => openPlayer(RtPlayer.I.current!),
-          ),
+          // Always visible: shows the playing track, else the last audio that
+          // was played (persisted across launches), else an idle row. It is the
+          // anchor the free-tier ad strip sits directly above.
+          bottomNavigationBar: const MiniBar(),
           body: CustomScrollView(
             slivers: [
               if (store.anyArranging)
@@ -320,21 +315,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
           ),
         );
       },
-      ),
-    );
-  }
-
-  void openPlayer(Track t) {
-    showModalBottomSheet(
-      context: context,
-      showDragHandle: true,
-      useSafeArea: true,
-      // Re-opening the player must NOT rebuild/restart the queue that is
-      // already playing (that used to reshuffle and jump back to 0:00).
-      builder: (_) => PlayerSheet(
-        track: t,
-        contextTracks: const [],
-        startPlayback: false,
       ),
     );
   }
@@ -1384,11 +1364,12 @@ Future<void> deleteTrackWithConfirm(BuildContext context, Track t) async {
 enum _MenuAction { rearrange, rename, move, remove, delete }
 
 class MiniBar extends StatelessWidget {
-  /// Null when nothing has been played yet — the bar still renders (idle
-  /// state) because it is the anchor for the ad strip and for "resume".
+  /// Optional override. Normally omitted: the bar resolves the playing track,
+  /// else the last track that was played (persisted across launches), else an
+  /// idle row. It is always mounted because it anchors the ad strip.
   final Track? track;
   final VoidCallback? onTap;
-  const MiniBar({required this.track, this.onTap});
+  const MiniBar({this.track, this.onTap});
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -1398,10 +1379,51 @@ class MiniBar extends StatelessWidget {
       // immediately, and the player object alone does not notify on renames.
       listenable: Listenable.merge([player, AppStore.I]),
       builder: (context, _) {
-        final t = track ?? player.current;
+        final t = track ??
+            player.current ??
+            AppStore.I.trackById(AppStore.I.lastTrackId);
         final idle = t == null;
-        final durMs =
-            idle ? 0 : (player.duration?.inMilliseconds ?? t.durationMs);
+        // Engine has nothing loaded (fresh launch / stopped) but this audio was
+        // played before → show it as resumable instead of an empty bar.
+        final resume = t != null && player.current == null;
+        final durMs = idle
+            ? 0
+            : (resume
+                ? t.durationMs
+                : (player.duration?.inMilliseconds ?? t.durationMs));
+
+        void openPlayer() {
+          if (t == null) return;
+          if (onTap != null) {
+            onTap!();
+            return;
+          }
+          final loaded = RtPlayer.I.current != null;
+          showModalBottomSheet(
+            context: context,
+            showDragHandle: true,
+            useSafeArea: true,
+            builder: (_) => PlayerSheet(
+              track: t,
+              contextTracks:
+                  loaded ? const [] : AppStore.I.visibleTracksSorted.toList(),
+              startPlayback: !loaded,
+            ),
+          );
+        }
+
+        void playPause() {
+          if (t == null) return;
+          if (player.current == null) {
+            // Remembered track: build the queue around it, exactly like tapping
+            // its row in the library.
+            RtPlayer.I.play(t,
+                context: AppStore.I.visibleTracksSorted.toList());
+          } else {
+            player.toggle();
+          }
+        }
+
         return SafeArea(
           top: false,
           child: Card(
@@ -1411,7 +1433,7 @@ class MiniBar extends StatelessWidget {
               children: [
                 ListTile(
                   dense: true,
-                  onTap: idle ? null : onTap,
+                  onTap: idle ? null : openPlayer,
                   leading: Container(
                     width: 38,
                     height: 38,
@@ -1431,21 +1453,30 @@ class MiniBar extends StatelessWidget {
                   subtitle: idle
                       ? Text('Tap a track to start',
                           style: Theme.of(context).textTheme.labelSmall)
-                      : StreamBuilder<Duration>(
-                          stream: player.positionStream,
-                          builder: (c, pos) => Text(
-                            '${mmss((pos.data ?? Duration.zero).inMilliseconds)} / '
-                            '${durMs > 0 ? mmss(durMs) : '—'}',
-                            style: Theme.of(context).textTheme.labelSmall,
-                          ),
-                        ),
+                      : resume
+                          ? Text(
+                              durMs > 0
+                                  ? 'Last played · ${mmss(durMs)} · tap play to resume'
+                                  : 'Last played · tap play to resume',
+                              style: Theme.of(context).textTheme.labelSmall,
+                              overflow: TextOverflow.ellipsis,
+                            )
+                          : StreamBuilder<Duration>(
+                              stream: player.positionStream,
+                              builder: (c, pos) => Text(
+                                '${mmss((pos.data ?? Duration.zero).inMilliseconds)} / '
+                                '${durMs > 0 ? mmss(durMs) : '—'}',
+                                style: Theme.of(context).textTheme.labelSmall,
+                              ),
+                            ),
                   // Skip previous / play-pause / skip next, always reachable
                   // without opening the full player.
                   trailing: Row(mainAxisSize: MainAxisSize.min, children: [
                     IconButton(
                       visualDensity: VisualDensity.compact,
                       tooltip: 'Previous',
-                      onPressed: idle ? null : () => player.skipPrev(),
+                      onPressed:
+                          idle || resume ? null : () => player.skipPrev(),
                       icon: const Icon(Icons.skip_previous_rounded),
                     ),
                     // Engine-stream-driven so the glyph flips the instant
@@ -1458,12 +1489,13 @@ class MiniBar extends StatelessWidget {
                         return IconButton(
                           visualDensity: VisualDensity.compact,
                           tooltip: isPlaying ? 'Pause' : 'Play',
-                          onPressed: idle ? null : () => player.toggle(),
+                          onPressed: idle ? null : playPause,
                           icon: AnimatedSwitcher(
                             duration: const Duration(milliseconds: 180),
                             transitionBuilder: (child, anim) => ScaleTransition(
                               scale: anim,
-                              child: FadeTransition(opacity: anim, child: child),
+                              child:
+                                  FadeTransition(opacity: anim, child: child),
                             ),
                             child: Icon(
                               isPlaying
@@ -1479,12 +1511,12 @@ class MiniBar extends StatelessWidget {
                     IconButton(
                       visualDensity: VisualDensity.compact,
                       tooltip: 'Next',
-                      onPressed: idle ? null : () => player.skipNext(),
+                      onPressed: idle || resume ? null : () => player.skipNext(),
                       icon: const Icon(Icons.skip_next_rounded),
                     ),
                   ]),
                 ),
-                if (!idle)
+                if (!idle && !resume)
                   StreamBuilder<Duration>(
                     stream: player.positionStream,
                     builder: (c, pos) {

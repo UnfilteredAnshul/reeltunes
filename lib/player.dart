@@ -197,6 +197,7 @@ class RtPlayer extends ChangeNotifier {
     }
     final t = queue[queueIndex];
     current = t;
+    AppStore.I.setLastPlayedId(t.id);
     _silentFire();
     try {
       final sources = <AudioSource>[for (final q in queue) _sourceFor(q)];
@@ -450,6 +451,8 @@ class RtPlayer extends ChangeNotifier {
     }
     queueIndex = i;
     current = i < queue.length ? queue[i] : null;
+    final loaded = current;
+    if (loaded != null) AppStore.I.setLastPlayedId(loaded.id);
     _newTrackLoops();
     _silentFire();
   }
@@ -532,6 +535,7 @@ class RtPlayer extends ChangeNotifier {
     queueIndex = queueIndex.clamp(0, queue.length - 1);
     if (wasCurrent) {
       current = queue[queueIndex];
+      AppStore.I.setLastPlayedId(current!.id);
       if (_booted && _ap != null) {
         try {
           // The removed item may have been the last one in the queue, which

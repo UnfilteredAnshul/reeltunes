@@ -155,6 +155,11 @@ class AppStore extends ChangeNotifier {
 
   String? selectedFolderId; // null = All audios
 
+  /// The track the player loaded last. The mini bar uses it on a fresh launch
+  /// (the engine has nothing loaded yet), so the bar is never empty even
+  /// though playback always starts paused.
+  String lastTrackId = '';
+
   // Library search + date filter (session state — deliberately not persisted,
   // so relaunching always shows everything).
   String searchQuery = '';
@@ -211,6 +216,7 @@ class AppStore extends ChangeNotifier {
     sortAsc = _prefs.getBool('sortAsc') ?? true;
     guideBannerDismissed = _prefs.getBool('guideBannerDismissed') ?? false;
     hiddenFileNames = _prefs.getStringList('hiddenFileNames') ?? const [];
+    lastTrackId = _prefs.getString('lastTrackId') ?? '';
     loopHistory = (_prefs.getStringList('loopHistory') ?? const <String>[])
         .map(int.tryParse)
         .whereType<int>()
@@ -252,6 +258,7 @@ class AppStore extends ChangeNotifier {
     _prefs.setBool('sortAsc', sortAsc);
     _prefs.setBool('guideBannerDismissed', guideBannerDismissed);
     _prefs.setStringList('hiddenFileNames', hiddenFileNames);
+    _prefs.setString('lastTrackId', lastTrackId);
     _prefs.setStringList(
         'loopHistory', [for (final n in loopHistory) '$n']);
     try {
@@ -334,7 +341,21 @@ class AppStore extends ChangeNotifier {
 
   void removeTrack(String id) {
     tracks.removeWhere((t) => t.id == id);
+    if (lastTrackId == id) {
+      lastTrackId = '';
+      _prefs.setString('lastTrackId', '');
+    }
     _persist();
+  }
+
+  /// Records what the player has loaded so the mini bar can show it again after
+  /// a relaunch. Plain pref write (no library save/mirror) — this fires on every
+  /// track change.
+  void setLastPlayedId(String id) {
+    if (lastTrackId == id) return;
+    lastTrackId = id;
+    _prefs.setString('lastTrackId', id);
+    notifyListeners();
   }
 
   void renameTrack(String id, String title) {
