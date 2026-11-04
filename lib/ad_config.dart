@@ -26,6 +26,11 @@ class AdConfig {
   static const String liveRewardedUnit =
       'ca-app-pub-5837741403938321/4971428445';
 
+  /// Rewarded video: watch → proceed with a download or import (Free tier,
+  /// one ad per audio). Replaces the loading/downloading moment.
+  static const String liveDownloadUnit =
+      'ca-app-pub-5837741403938321/1020962184';
+
   /// App-open ad: shown instead of a blank moment at cold start.
   static const String liveAppOpenUnit =
       'ca-app-pub-5837741403938321/1962121722';
@@ -42,6 +47,9 @@ class AdConfig {
       'ca-app-pub-3940256099942544/5224354917';
   static const String testAppOpenUnit =
       'ca-app-pub-3940256099942544/9257395921';
+
+  /// Download/import gate stands in for the same rewarded sample in debug.
+  static const String testDownloadUnit = testRewardedUnit;
 
   /// The in-list placement uses a normal banner request, so Google's sample
   /// banner is the safe stand-in.
@@ -73,6 +81,11 @@ class AdConfig {
   static String get appOpenUnitId =>
       useTestAds ? testAppOpenUnit : liveAppOpenUnit;
 
+  /// Rewarded video shown before a download/import in Free tier (one per
+  /// audio). Falls back to the rewarded sample in test mode.
+  static String get downloadUnitId =>
+      useTestAds ? testDownloadUnit : liveDownloadUnit;
+
   /// Both in-list placements request this same unit. AdMob counts impressions
   /// per request, so duplicating a unit is allowed and pays the same; separate
   /// units would only give separate reporting rows.
@@ -87,7 +100,7 @@ class AdConfig {
     if (useTestAds) {
       return 'Test ads · Google samples (safe to tap)';
     }
-    return 'Live ads · banner, rewarded, app-open, playlist';
+    return 'Live ads · banner, rewarded, download gate, app-open, playlist';
   }
 
   /// True when the Dart app id and the manifest app id could disagree.

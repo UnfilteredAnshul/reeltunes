@@ -16,6 +16,7 @@ import 'link_rules.dart';
 import 'models.dart';
 import 'player.dart';
 import 'top_toast.dart';
+import 'ads.dart';
 
 // ---------------------------------------------------------------------------
 // Add reel / extraction intake
@@ -240,6 +241,18 @@ class _AddReelSheetState extends State<AddReelSheet> {
           reason: 'Free tier holds ${Entitlements.I.maxTracks} audios');
       return;
     }
+
+    // Free tier: one download/import ad per audio. Replaces the loading /
+    // downloading moment — the ad runs first, the download starts after.
+    if (Entitlements.I.showAds) {
+      final earned = await Ads.I.showDownloadAd();
+      if (!mounted) return;
+      if (!earned) {
+        showTopToast(context,
+            'Ad didn\'t load — proceeding with the download anyway.');
+      }
+    }
+
     setState(() {
       state = _ExtractionState.running;
       status = 'Preparing engine…';

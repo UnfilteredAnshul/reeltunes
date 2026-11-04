@@ -36,6 +36,11 @@ class Ads extends ChangeNotifier {
   RewardedAd? _rewarded;
   bool _rewardedLoading = false;
 
+  /// Rewarded video shown before a download/import in Free tier (one per
+  /// audio). Preloaded so it's ready when the user taps "download"/"import".
+  RewardedAd? _downloadAd;
+  bool _downloadLoading = false;
+
   /// Preloaded playlist banner ads, kept warm so an impression is never missed
   /// because the user scrolled past before the ad finished loading.
   final List<BannerAd> _playlistAds = [];
@@ -70,21 +75,26 @@ class Ads extends ChangeNotifier {
       if (!Entitlements.I.showAds) return;
       unawaited(preloadRewarded());
       unawaited(preloadAppOpen());
+      unawaited(preloadDownloadAd());
       unawaited(preloadPlaylistAds());
     }));
     // If ads are ever disabled (Pro, trial, coin-shop no-ads window), drop any
-    // preloaded playlist banners so they don't sit idle in memory.
+    // preloaded ads so they don't sit idle in memory.
     Entitlements.I.addListener(_onAdsGateChanged);
   }
 
   void _onAdsGateChanged() {
     if (!Entitlements.I.showAds) {
+      _downloadAd?.dispose();
+      _downloadAd = null;
+      _downloadLoading = false;
       for (final a in _playlistAds) {
         a.dispose();
       }
       _playlistAds.clear();
       _playlistLoading = false;
     } else {
+      unawaited(preloadDownloadAd());
       unawaited(preloadPlaylistAds());
     }
   }
@@ -100,6 +110,9 @@ class Ads extends ChangeNotifier {
     _rewarded = null;
     _appOpen?.dispose();
     _appOpen = null;
+    _downloadAd?.dispose();
+    _downloadAd = null;
+    _downloadLoading = false;
     for (final a in _playlistAds) {
       a.dispose();
     }
@@ -109,6 +122,7 @@ class Ads extends ChangeNotifier {
     if (!v) {
       unawaited(preloadRewarded());
       unawaited(preloadAppOpen());
+      unawaited(preloadDownloadAd());
       unawaited(preloadPlaylistAds());
     }
   }
@@ -299,6 +313,82 @@ class Ads extends ChangeNotifier {
     } catch (e) {
       ad.dispose();
       debugPrint('rewarded threw: $e');
+      return false;
+    }
+    return done.future.timeout(const Duration(minutes: 3),
+        onTimeout: () => earned);
+  }
+
+  // ---- download / import gate --------------------------------------------
+
+  /// Preloads the rewarded video that gates a download or import in Free
+  /// tier. One ad per audio; kept warm so it's ready when the user taps
+  /// "download" or "import".
+  Future<void> preloadDownloadAd() async {
+    if (!Entitlements.I.showAds) return;
+    if (!_ready || _downloadAd != null || _downloadLoading) return;
+    _downloadLoading = true;
+    try {
+      await RewardedAd.load(
+        adUnitId: AdConfig.downloadUnitId,
+        request: const AdRequest(),
+        rewardedAdLoadCallback: RewardedAdLoadCallback(
+          onAdLoaded: (ad) {
+            _downloadAd = ad;
+            _downloadLoading = false;
+          },
+          onAdFailedToLoad: (error) {
+            _downloadLoading = false;
+            debugPrint(
+                'download gate load failed (${error.code}): ${error.message}');
+          },
+        ),
+      );
+    } catch (e) {
+      _downloadLoading = false;
+      debugPrint('download gate setup failed: $e');
+    }
+  }
+
+  /// Shows the download/import gate ad. Returns true only when the user
+  /// watched far enough for Google to fire the reward callback, meaning the
+  /// download/import may proceed. Returns false when no ad is available —
+  /// the caller should still proceed gracefully so the app never blocks.
+  Future<bool> showDownloadAd() async {
+    await init();
+    if (_downloadAd == null) {
+      unawaited(preloadDownloadAd());
+      final end = DateTime.now().add(const Duration(seconds: 6));
+      while (_downloadAd == null && DateTime.now().isBefore(end)) {
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
+    }
+    final ad = _downloadAd;
+    if (ad == null) return false;
+    _downloadAd = null;
+
+    var earned = false;
+    final done = Completer<bool>();
+    ad.fullScreenContentCallback = FullScreenContentCallback(
+      onAdDismissedFullScreenContent: (a) {
+        a.dispose();
+        if (!done.isCompleted) done.complete(earned);
+        unawaited(preloadDownloadAd());
+      },
+      onAdFailedToShowFullScreenContent: (a, error) {
+        a.dispose();
+        debugPrint('download gate show failed: ${error.message}');
+        if (!done.isCompleted) done.complete(false);
+        unawaited(preloadDownloadAd());
+      },
+    );
+    try {
+      await ad.show(
+        onUserEarnedReward: (_, _) => earned = true,
+      );
+    } catch (e) {
+      ad.dispose();
+      debugPrint('download gate threw: $e');
       return false;
     }
     return done.future.timeout(const Duration(minutes: 3),

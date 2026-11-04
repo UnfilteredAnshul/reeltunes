@@ -452,6 +452,18 @@ class _LibraryScreenState extends State<LibraryScreen> {
       ),
     );
     if (choice == null || !mounted) return;
+
+    // Free tier: one download/import ad per audio. Replaces the loading /
+    // importing moment — the ad runs first, the import starts after.
+    if (Entitlements.I.showAds) {
+      final earned = await Ads.I.showDownloadAd();
+      if (!mounted) return;
+      if (!earned) {
+        showTopToast(context,
+            'Ad didn\'t load — proceeding with the import anyway.');
+      }
+    }
+
     try {
       final n = choice == 'files'
           ? await importMediaFiles(context)
