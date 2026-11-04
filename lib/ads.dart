@@ -129,7 +129,8 @@ class Ads extends ChangeNotifier {
 
   /// Fills the playlist banner pool up to [_playlistTarget]. Safe to call
   /// repeatedly — it only loads while the pool isn't full and no load is in
-  /// flight.
+  /// flight. Only ads that actually loaded (onAdLoaded fired) enter the pool,
+  /// so takePlaylistAd() never returns an un-loaded ad.
   Future<void> preloadPlaylistAds() async {
     if (!Entitlements.I.showAds) return;
     while (_playlistAds.length < _playlistTarget && !_playlistLoading) {
@@ -141,7 +142,10 @@ class Ads extends ChangeNotifier {
           request: const AdRequest(),
           listener: BannerAdListener(
             onAdLoaded: (a) {
-              _playlistAds.add(a as BannerAd);
+              final ba = a as BannerAd;
+              if (!_playlistAds.contains(ba)) {
+                _playlistAds.add(ba);
+              }
               _playlistLoading = false;
               // Keep the pool topped up.
               if (_playlistAds.length < _playlistTarget) {
@@ -159,15 +163,6 @@ class Ads extends ChangeNotifier {
           ),
         );
         await ad.load();
-        // onAdLoaded should fire during load(); if it hasn't yet, add the ad
-        // now so the pool doesn't stall.
-        if (!_playlistAds.contains(ad)) {
-          _playlistAds.add(ad);
-          _playlistLoading = false;
-          if (_playlistAds.length < _playlistTarget) {
-            unawaited(preloadPlaylistAds());
-          }
-        }
       } catch (e) {
         _playlistLoading = false;
         debugPrint('playlist banner setup failed: $e');
@@ -521,9 +516,6 @@ class _PlaylistAdCardState extends State<PlaylistAdCard> {
 
   @override
   void dispose() {
-    // If we took a preloaded ad but the card was removed before it was ever
-    // displayed, dispose it so it doesn't leak.
-    _preloaded?.dispose();
     super.dispose();
   }
 
@@ -538,7 +530,7 @@ class _PlaylistAdCardState extends State<PlaylistAdCard> {
           return const SizedBox.shrink();
         }
         return _BannerFrame(
-          key: ValueKey('playlist-${AdConfig.useTestAds}'),
+          key: widget.key,
           unitId: AdConfig.playlistUnitId,
           adaptive: false,
           inline: true,

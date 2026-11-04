@@ -1097,7 +1097,7 @@ class _TracksView extends StatelessWidget {
         if (t == null) {
           return KeyedSubtree(
             key: ValueKey('playlist-ad-$i'),
-            child: const PlaylistAdCard(),
+            child: PlaylistAdCard(key: ValueKey('playlist-card-$i')),
           );
         }
         return KeyedSubtree(
