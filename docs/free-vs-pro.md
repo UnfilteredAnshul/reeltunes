@@ -73,45 +73,55 @@ It converts ad inventory into something the user chose, which keeps ads from
 feeling like a tax.
 
 > **What is implemented today (`lib/coins.dart` + `lib/shop_sheet.dart`):**
-> **5 coins per completed rewarded video**; **20 coins = no ads for 24 h**;
-> **25 coins = +25 audio slots for 30 days**. The wallet is local
-> (SharedPreferences) until the SSV ledger exists. The shop, balance and
-> gold "Watch ad" button are **Free-only**; a coin purchase never changes the
-> plan, so they stay visible while a 24 h ad-free window is running.
+> **1 coin per completed rewarded video**; the shop has **10 timed perks**:
+> **no ads (24 h / 7 d / 30 d / 90 d)**, **+25 / +50 audio slots (30 d / 90 d)**,
+> **3rd playlist slot (30 d)**, and **custom loop range (7 d / 30 d)**.
+> The wallet is local (SharedPreferences) until the SSV ledger exists. The shop,
+> balance and gold "Watch ad" button are **Free-only**; a coin purchase never
+> changes the plan, so they stay visible while a no-ads window is running.
 
 ### Earning
-- **5 coins per completed rewarded video** in the local build. Production:
+- **1 coin per completed rewarded video** in the local build. Production:
   completion is confirmed by the ad network's **server-side verification (SSV)**
   callback, not the app — the app cannot mint coins by patching code.
 - **Daily earn cap** (start at **15–20 ads/day**) so inventory isn't burned and
   nobody farms the shop. Number is a server constant, not in the APK.
 - No coins for banners or interstitials — only videos the user opened.
 
-### Shop (all items timed, all expire)
-| Item | Cost today | Duration | State |
+### Shop (all items timed, all expire; costs at 1 coin per ad)
+| Item | Cost | Duration | State |
 |---|---|---|---|
-| No ads | 20 coins | 24 h | **implemented** |
-| +25 audio slots | 25 coins | 30 days | **implemented** |
-| 3rd playlist slot | 15 coins | 30 days | planned |
-| Custom loop range | 10 coins | 7 days | planned |
+| No ads | 6 coins | 24 h | **implemented** |
+| No ads | 20 coins | 7 days | **implemented** |
+| No ads | 50 coins | 30 days | **implemented** |
+| No ads | 120 coins | 90 days | **implemented** |
+| +25 audio slots | 10 coins | 30 days | **implemented** |
+| +25 audio slots | 25 coins | 90 days | **implemented** |
+| +50 audio slots | 18 coins | 30 days | **implemented** |
+| 3rd playlist slot | 8 coins | 30 days | **implemented** |
+| Custom loop range | 4 coins | 7 days | **implemented** |
+| Custom loop range | 12 coins | 30 days | **implemented** |
 
 Final numbers **after** you see real eCPM. Because costs are server-side, you
 change prices without shipping an update. Buying an active perk again extends
 it instead of resetting the clock.
 
 ### Ad-free is a pause, not a plan change
-`Entitlements.showAds` is `capped && !CoinWallet.adFree`. A purchased 24 h
-window hides the sticky banner, the playlist cards and the app-open/rewarded
-prompts while leaving the shop, balance and "watch ad" button untouched — the
-user can keep earning during the pause. Pro/trial still hide all coin UI.
+`Entitlements.showAds` is `capped && !CoinWallet.adFree` (where `adFree` is true
+while *any* no-ads perk is active). A purchased window hides the sticky banner,
+the playlist cards and the app-open/rewarded prompts while leaving the shop,
+balance and "watch ad" button untouched — the user can keep earning during the
+pause. Pro/trial still hide all coin UI.
 
 ### The money guardrail (important)
 Indian rewarded eCPM is roughly **$1–4 per 1000 views** → **≈ ₹0.10–0.35 per
-ad**. So 20 ads ≈ **₹2–7** of revenue, while one day of Pro is ₹13.
+ad**. So one coin ≈ **₹0.10–0.35** of revenue.
 
 That means free coins are cheap goodwill, **not** a Pro replacement. Price every
 shop item so it costs *less* value than the Pro day it imitates — otherwise you
-pay users to avoid paying you.
+pay users to avoid paying you. For context: one day of Pro at ₹399/mo is ≈
+₹13, so even the 90-day no-ads perk (120 coins ≈ ₹12–43) stays below a month of
+Pro.
 
 ### Storage & anti-tamper
 - Balance lives in the **Cloudflare Worker + KV** keyed by install ID, mirrored

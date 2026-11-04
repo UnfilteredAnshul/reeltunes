@@ -1,8 +1,7 @@
 // Coin shop: the Free-tier reward loop. Watch a rewarded ad → earn coins →
 // spend them on timed perks. Shown only while the plan is Free
 // (`Entitlements.shopAvailable`); a coin purchase never changes the plan, so
-// the shop and the earn button stay available even while a 24 h ad-free window
-// is running.
+// the shop and the earn button stay available even while a no-ads window runs.
 //
 // All amounts are local constants for now; production moves verification to
 // AdMob SSV + a server ledger (docs/free-vs-pro.md §3).
@@ -95,7 +94,7 @@ class _ShopSheetState extends State<_ShopSheet> {
       if (earned) {
         await CoinWallet.I.addFromAd();
         if (mounted) {
-          showTopToast(context, '+${CoinWallet.coinsPerAd} coins');
+          showTopToast(context, '+${CoinWallet.coinsPerAd} coin');
         }
       } else {
         showTopToast(context, 'No ad available right now — try again.',
@@ -106,50 +105,57 @@ class _ShopSheetState extends State<_ShopSheet> {
     }
   }
 
-  Future<void> _buyAdFree() async {
-    if (_busy) return;
-    final coins = CoinWallet.I;
-    if (!coins.canAffordAdFree) {
-      showTopToast(context,
-          'Need ${CoinWallet.adFreeCost} coins — watch an ad to earn more',
-          error: true);
-      return;
-    }
-    setState(() => _busy = true);
-    final ok = await coins.buyAdFree();
-    if (!mounted) return;
-    setState(() => _busy = false);
-    showTopToast(context,
-        ok ? 'No ads for 24 hours · shop stays open' : 'Not enough coins',
-        error: !ok);
-  }
-
-  Future<void> _buyExtraTracks() async {
-    if (_busy) return;
-    final coins = CoinWallet.I;
-    if (!coins.canAffordExtraTracks) {
-      showTopToast(context,
-          'Need ${CoinWallet.extraTracksCost} coins — watch an ad to earn more',
-          error: true);
-      return;
-    }
-    setState(() => _busy = true);
-    final ok = await coins.buyExtraTracks();
-    if (!mounted) return;
-    setState(() => _busy = false);
-    showTopToast(
-        context,
-        ok
-            ? '+${CoinWallet.extraTracks} audio slots for 30 days'
-            : 'Not enough coins',
-        error: !ok);
-  }
-
   static String _when(DateTime? d) {
     if (d == null) return '';
     final h = d.hour.toString().padLeft(2, '0');
     final m = d.minute.toString().padLeft(2, '0');
     return '${d.day}/${d.month} · $h:$m';
+  }
+
+  /// Summary line for every active perk, shown at the top of the shop.
+  List<Widget> _activePerks() {
+    final out = <Widget>[];
+    for (final p in CoinWallet.perks) {
+      if (!CoinWallet.I.isPerkActive(p.id)) continue;
+      out.add(
+        Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: Row(children: [
+            const Icon(Icons.check_circle, size: 16, color: coinGold),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '${p.title} active until '
+                '${_when(CoinWallet.I.perkUntil(p.id))}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+          ]),
+        ),
+      );
+    }
+    return out;
+  }
+
+  Future<void> _buy(CoinPerk p) async {
+    if (_busy) return;
+    final coins = CoinWallet.I;
+    if (!coins.canAfford(p)) {
+      showTopToast(context,
+          'Need ${p.cost} coin${p.cost == 1 ? '' : 's'} — watch an ad to earn more',
+          error: true);
+      return;
+    }
+    setState(() => _busy = true);
+    final ok = await coins.buyPerk(p);
+    if (!mounted) return;
+    setState(() => _busy = false);
+    showTopToast(
+        context,
+        ok
+            ? '${p.title} active'
+            : 'Not enough coins',
+        error: !ok);
   }
 
   @override
@@ -179,13 +185,13 @@ class _ShopSheetState extends State<_ShopSheet> {
               ]),
               const SizedBox(height: 6),
               Text(
-                'Watch a short video, earn ${CoinWallet.coinsPerAd} coins, and '
-                'spend them on perks. Coins do not change your plan.',
+                'Watch a short video, earn ${CoinWallet.coinsPerAd} coin per '
+                'view, and spend them on timed perks. Coins do not change your '
+                'plan — Pro or trial hide this shop entirely.',
                 style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
               ),
               const SizedBox(height: 14),
-              // The gold earn button. Same expand/collapse idea as the import
-              // FAB, but always labelled here so the action is obvious.
+              // The gold earn button.
               FilledButton.icon(
                 style: FilledButton.styleFrom(
                   backgroundColor: coinGoldLight,
@@ -205,55 +211,33 @@ class _ShopSheetState extends State<_ShopSheet> {
                 label: Text(
                   _busy
                       ? 'Loading ad…'
-                      : 'Watch ad · +${CoinWallet.coinsPerAd} coins',
+                      : 'Watch ad · +${CoinWallet.coinsPerAd} coin',
                   style: const TextStyle(fontWeight: FontWeight.w700),
                 ),
               ),
-              if (coins.adFree) ...[
+              if (_activePerks().isNotEmpty) ...[
                 const SizedBox(height: 10),
-                Row(children: [
-                  const Icon(Icons.check_circle,
-                      size: 18, color: coinGold),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'No ads until ${_when(coins.adFreeUntil)} — you can '
-                      'still earn and spend coins.',
-                      style: text.bodySmall,
-                    ),
-                  ),
-                ]),
+                ..._activePerks(),
               ],
               const SizedBox(height: 18),
               Text('Perks',
                   style: text.titleSmall
                       ?.copyWith(fontWeight: FontWeight.w700)),
               const SizedBox(height: 8),
-              _ShopTile(
-                icon: Icons.block_outlined,
-                title: 'No ads · 24 hours',
-                subtitle: coins.adFree
-                    ? 'Active until ${_when(coins.adFreeUntil)}'
-                    : 'Hide every banner and the playlist ads for a day',
-                cost: CoinWallet.adFreeCost,
-                active: coins.adFree,
-                enabled: !_busy && coins.canAffordAdFree,
-                onBuy: _buyAdFree,
-              ),
-              const SizedBox(height: 8),
-              _ShopTile(
-                icon: Icons.library_add_outlined,
-                title: '+${CoinWallet.extraTracks} audio slots · 30 days',
-                subtitle: coins.extraTracksActive
-                    ? 'Active until ${_when(coins.extraTracksUntil)} · '
-                        '${Entitlements.I.maxTracks} audios available'
-                    : 'Grow the Free 25 up to '
-                        '${Entitlements.freeMaxTracks + CoinWallet.extraTracks}',
-                cost: CoinWallet.extraTracksCost,
-                active: coins.extraTracksActive,
-                enabled: !_busy && coins.canAffordExtraTracks,
-                onBuy: _buyExtraTracks,
-              ),
+              for (final p in CoinWallet.perks) ...[
+                _ShopTile(
+                  icon: p.icon,
+                  title: p.title,
+                  subtitle: coins.isPerkActive(p.id)
+                      ? 'Active until ${_when(coins.perkUntil(p.id))}'
+                      : p.subtitle,
+                  cost: p.cost,
+                  active: coins.isPerkActive(p.id),
+                  enabled: !_busy && coins.canAfford(p),
+                  onBuy: () => _buy(p),
+                ),
+                const SizedBox(height: 8),
+              ],
               const SizedBox(height: 14),
               Text(
                 'Prefer no ads permanently? Pro also removes the limits.',

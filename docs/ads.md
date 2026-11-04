@@ -25,6 +25,27 @@ safety switch is **Settings → Debug tiers → Use test ad units** (or
 `--dart-define=ADMOB_TEST_ADS=true`). Never tap your own live ad: invalid
 traffic is the one thing that can suspend an AdMob account.
 
+### Do you need a second unit for the playlist banner?
+
+**No.** Both playlist placements (after the 8th and 18th audio) request the
+same unit `…/2022006489`, and that is intentional — AdMob pays per
+impression/click, not per unit id. You do **not** need a separate unit for the
+second placement; separate units only split reporting into two dashboard rows.
+
+If you only see **one** playlist ad, the likely causes are:
+
+1. **Fewer than 19 tracks** — the second card only renders after the 18th
+   audio, so a small library only ever shows the first.
+2. **No fill** — a brand-new unit can take minutes to a couple of hours for its
+   first impression, and fill stays low until the app is on Play *and*
+   `app-ads.txt` is verified. One card filling while the other doesn't is
+   normal fill variance, not a code bug.
+3. **Screen too narrow** — `PlaylistAdCard` hides itself on screens too narrow
+   to show a 320 px banner uncropped (cropping an ad is against AdMob policy).
+
+If you want separate reporting rows for the two positions, create a second unit
+and point one placement at it. Revenue is identical either way.
+
 ---
 
 ## 1. Which network to use

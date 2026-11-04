@@ -406,7 +406,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
       if (earned) {
         await CoinWallet.I.addFromAd();
         if (mounted) {
-          showTopToast(context, '+${CoinWallet.coinsPerAd} coins');
+          showTopToast(
+              context, '+${CoinWallet.coinsPerAd} coin${CoinWallet.coinsPerAd == 1 ? '' : 's'}');
         }
       } else {
         showTopToast(context, 'No ad available right now — try again.',

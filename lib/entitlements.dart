@@ -199,17 +199,20 @@ class Entitlements extends ChangeNotifier {
 
   int get maxTracks =>
       isPro ? 1 << 20 : freeMaxTracks + CoinWallet.I.bonusTracks;
-  int get maxPlaylists => isPro ? 1 << 20 : freeMaxPlaylists;
-  bool get canUseCustomRange => isPro;
+  int get maxPlaylists =>
+      isPro ? 1 << 20 : freeMaxPlaylists + CoinWallet.I.bonusPlaylists;
+  bool get canUseCustomRange =>
+      isPro || CoinWallet.I.customRangeActive;
 
-  /// Ads are on for Free only — and a coin-shop "no ads · 24 h" purchase pauses
-  /// them without changing the plan (the shop and earn button stay available).
+  /// Ads are on for Free only — and a coin-shop "no ads" purchase pauses them
+  /// without changing the plan (the shop and earn button stay available).
   bool get showAds => capped && !CoinWallet.I.adFree;
 
   bool canAddTracks(int current, [int adding = 1]) =>
       isPro || current + adding <= maxTracks;
 
-  bool canAddPlaylist(int current) => isPro || current < freeMaxPlaylists;
+  bool canAddPlaylist(int current) =>
+      isPro || current < maxPlaylists;
 
   /// One plain sentence for a blocked import. Null when allowed.
   String? importBlockReason(int current) {
