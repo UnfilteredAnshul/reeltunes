@@ -423,14 +423,17 @@ class Ads extends ChangeNotifier {
     if (!Entitlements.I.showAds) return;
     if (_appOpenShownThisLaunch) return;
     await init();
+    // Make sure the ad is warming up — the splash may finish before the
+    // consent-driven preload inside _start() has completed.
+    unawaited(preloadAppOpen());
     final prefs = await SharedPreferences.getInstance();
     final last = prefs.getInt('adAppOpenShownMs') ?? 0;
     final now = DateTime.now().millisecondsSinceEpoch;
     if (now - last < const Duration(hours: 4).inMilliseconds) return;
 
-    // Give the preloaded ad a short window; the library must never wait longer
-    // than this for an ad.
-    final end = DateTime.now().add(const Duration(seconds: 3));
+    // Give the preloaded ad a generous window so a slow consent flow or ad
+    // fetch doesn't cause us to miss the slot entirely.
+    final end = DateTime.now().add(const Duration(seconds: 10));
     while (_appOpen == null && DateTime.now().isBefore(end)) {
       await Future<void>.delayed(const Duration(milliseconds: 200));
     }

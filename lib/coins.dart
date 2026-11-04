@@ -7,6 +7,12 @@
 //
 // Perks are data-driven: add an entry to [perks] and it shows up in the shop
 // automatically, with its own cost, duration, and effect.
+//
+// Stacking: buying the same perk again adds its benefit on top and extends the
+// window from the previous expiry (additive slots, additive days).
+//   • +25 slots ×2  → 50 bonus slots for 60 days  (cap 75)
+//   • +50 slots ×2  → 100 bonus slots for 60 days (cap 125)
+//   • +1 playlist ×2 → 2 bonus playlists for 60 days (total 4)
 
 import 'dart:async';
 
@@ -30,7 +36,7 @@ class CoinPerk {
   });
 
   final String id;
-  final String title;            // e.g. 'No ads · 7 days'
+  final String title;            // e.g. 'No ads · 24 h'
   final String subtitle;         // shown when not active
   final int cost;                // in coins
   final Duration duration;       // how long the perk lasts
@@ -50,18 +56,29 @@ class CoinWallet extends ChangeNotifier {
 
   SharedPreferences? _prefs;
   int _balance = 0;
-  /// perk id -> expiry ms since epoch
+  /// perk id -> latest expiry ms since epoch
   final Map<String, int> _perkExpiry = {};
+  /// perk id -> number of times purchased (while active)
+  final Map<String, int> _perkCount = {};
   Timer? _expiry;
 
-  /// All purchasable perks, in shop order. Ten options spanning ad-free
-  /// windows, extra audio slots, extra playlists, and the custom loop range.
+  /// All purchasable perks, in shop order.
   static const List<CoinPerk> perks = const [
+    // ---- no ads -----------------------------------------------------------
     CoinPerk(
-      id: 'no-ads-1d',
+      id: 'no-ads-12h',
+      title: 'No ads · 12 h',
+      subtitle: 'Hide every banner and playlist ad for half a day',
+      cost: 10,
+      duration: Duration(hours: 12),
+      icon: Icons.block_outlined,
+      noAds: true,
+    ),
+    CoinPerk(
+      id: 'no-ads-24h',
       title: 'No ads · 24 h',
       subtitle: 'Hide every banner and playlist ad for a day',
-      cost: 6,
+      cost: 15,
       duration: Duration(hours: 24),
       icon: Icons.block_outlined,
       noAds: true,
@@ -79,35 +96,18 @@ class CoinWallet extends ChangeNotifier {
       id: 'no-ads-30d',
       title: 'No ads · 30 days',
       subtitle: 'Hide every banner and playlist ad for a month',
-      cost: 50,
+      cost: 69,
       duration: Duration(days: 30),
       icon: Icons.block_outlined,
       noAds: true,
     ),
-    CoinPerk(
-      id: 'no-ads-90d',
-      title: 'No ads · 90 days',
-      subtitle: 'Hide every banner and playlist ad for 3 months',
-      cost: 120,
-      duration: Duration(days: 90),
-      icon: Icons.block_outlined,
-      noAds: true,
-    ),
+    // ---- audio slots ------------------------------------------------------
     CoinPerk(
       id: 'slots-25-30d',
       title: '+25 audio slots · 30 days',
       subtitle: 'Grow the Free 25 up to 50 audios',
       cost: 10,
       duration: Duration(days: 30),
-      icon: Icons.library_add_outlined,
-      bonusTracks: 25,
-    ),
-    CoinPerk(
-      id: 'slots-25-90d',
-      title: '+25 audio slots · 90 days',
-      subtitle: 'Grow the Free 25 up to 50 audios for 3 months',
-      cost: 25,
-      duration: Duration(days: 90),
       icon: Icons.library_add_outlined,
       bonusTracks: 25,
     ),
@@ -120,15 +120,17 @@ class CoinWallet extends ChangeNotifier {
       icon: Icons.library_add_outlined,
       bonusTracks: 50,
     ),
+    // ---- playlists --------------------------------------------------------
     CoinPerk(
       id: 'playlist-30d',
-      title: '3rd playlist slot · 30 days',
+      title: 'Extra playlist slot · 30 days',
       subtitle: 'Free tier gets 2 playlists — this adds one more',
       cost: 8,
       duration: Duration(days: 30),
       icon: Icons.queue_music,
       bonusPlaylists: 1,
     ),
+    // ---- loop range -------------------------------------------------------
     CoinPerk(
       id: 'custom-range-7d',
       title: 'Custom loop range · 7 days',
@@ -167,6 +169,9 @@ class CoinWallet extends ChangeNotifier {
         : null;
   }
 
+  /// Number of times [id] has been bought (counts toward stacked bonus).
+  int perkCount(String id) => _perkCount[id] ?? 0;
+
   // ---- state -------------------------------------------------------------
 
   int get balance => _balance;
@@ -185,15 +190,13 @@ class CoinWallet extends ChangeNotifier {
     return latest;
   }
 
-  /// Extra library slots from all active slot perks. Takes the max — a larger
-  /// purchase overrides a smaller one while both run — so buying +50 after
-  /// +25 just upgrades the window.
+  /// Extra library slots from all active slot perks (additive across purchases).
   int get bonusTracks {
-    int max = 0;
+    int total = 0;
     for (final p in perks.where((p) => p.bonusTracks > 0)) {
-      if (isPerkActive(p.id) && p.bonusTracks > max) max = p.bonusTracks;
+      if (isPerkActive(p.id)) total += perkCount(p.id) * p.bonusTracks;
     }
-    return max;
+    return total;
   }
 
   bool get extraTracksActive => bonusTracks > 0;
@@ -208,13 +211,13 @@ class CoinWallet extends ChangeNotifier {
     return latest;
   }
 
-  /// Extra playlist slots from all active playlist perks.
+  /// Extra playlist slots from all active playlist perks (additive).
   int get bonusPlaylists {
-    int max = 0;
+    int total = 0;
     for (final p in perks.where((p) => p.bonusPlaylists > 0)) {
-      if (isPerkActive(p.id) && p.bonusPlaylists > max) max = p.bonusPlaylists;
+      if (isPerkActive(p.id)) total += perkCount(p.id) * p.bonusPlaylists;
     }
-    return max;
+    return total;
   }
 
   bool get customRangeActive =>
@@ -242,12 +245,18 @@ class CoinWallet extends ChangeNotifier {
     return true;
   }
 
-  /// Buy [p]. Extends an active window instead of resetting it, so stacking the
-  /// same perk just pushes the expiry further out.
+  /// Buy [p]. Stacks additively: bonus tracks/playlists accumulate, and the
+  /// expiry window extends from the previous expiry (additive days).
   Future<bool> buyPerk(CoinPerk p) async {
     if (!await spend(p.cost)) return false;
-    final base = isPerkActive(p.id) ? perkUntil(p.id)! : DateTime.now();
-    _perkExpiry[p.id] = base.add(p.duration).millisecondsSinceEpoch;
+    final now = DateTime.now();
+    final base = isPerkActive(p.id)
+        ? DateTime.fromMillisecondsSinceEpoch(_perkExpiry[p.id]!)
+        : now;
+    // Extend from the previous expiry, never from now — so days stack.
+    final expiry = base.add(p.duration);
+    _perkExpiry[p.id] = expiry.millisecondsSinceEpoch;
+    _perkCount[p.id] = (perkCount(p.id) + 1);
     await _savePerk(p.id);
     _scheduleExpiry();
     notifyListeners();
@@ -261,11 +270,13 @@ class CoinWallet extends ChangeNotifier {
   Future<void> debugReset() async {
     _balance = 0;
     _perkExpiry.clear();
+    _perkCount.clear();
     final p = _prefs;
     if (p != null) {
       await p.remove('coinBalance');
       for (final perk in perks) {
         await p.remove('coinPerk_${perk.id}');
+        await p.remove('coinPerkCount_${perk.id}');
       }
     }
     _expiry?.cancel();
@@ -283,7 +294,9 @@ class CoinWallet extends ChangeNotifier {
   /// Debug only: remove a single perk by id.
   Future<void> removePerk(String id) async {
     _perkExpiry.remove(id);
+    _perkCount.remove(id);
     await _prefs?.remove('coinPerk_$id');
+    await _prefs?.remove('coinPerkCount_$id');
     _scheduleExpiry();
     notifyListeners();
   }
@@ -298,7 +311,17 @@ class CoinWallet extends ChangeNotifier {
       if (ms != null && ms > 0) {
         _perkExpiry[perk.id] = ms;
       }
+      final count = p.getInt('coinPerkCount_${perk.id}');
+      if (count != null && count > 0) {
+        _perkCount[perk.id] = count;
+      }
     }
+    // Drop perks that expired while the app was closed.
+    _perkExpiry.removeWhere((_, ms) {
+      final at = DateTime.fromMillisecondsSinceEpoch(ms);
+      return !at.isAfter(DateTime.now());
+    });
+    _perkCount.removeWhere((id, _) => !isPerkActive(id));
     _scheduleExpiry();
     notifyListeners();
   }
@@ -310,6 +333,7 @@ class CoinWallet extends ChangeNotifier {
     final ms = _perkExpiry[id];
     if (ms == null) return;
     await _prefs?.setInt('coinPerk_$id', ms);
+    await _prefs?.setInt('coinPerkCount_$id', _perkCount[id] ?? 1);
   }
 
   // ---- expiry ------------------------------------------------------------

@@ -194,13 +194,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                       const SizedBox(height: 12),
                       FloatingActionButton.extended(
                         heroTag: 'addReel',
-                        onPressed: () => showModalBottomSheet(
-                          context: context,
-                          showDragHandle: true,
-                          useSafeArea: false,
-                          isScrollControlled: true,
-                          builder: (_) => const AddReelSheet(),
-                        ),
+                        onPressed: _openAddReel,
                         label: const Text('Add reel'),
                         icon: const Icon(Icons.link),
                       ),
@@ -482,6 +476,25 @@ class _LibraryScreenState extends State<LibraryScreen> {
       if (!mounted) return;
       showTopToast(context, "Couldn't open that folder. Try again.");
     }
+  }
+
+  /// "Add reel" from the FAB: paywall at the Free cap before the sheet opens.
+  /// The download/import ad fires inside AddReelSheet._extract() / _openImportSheet(),
+  /// so exactly one ad plays per download or import.
+  Future<void> _openAddReel() async {
+    if (Entitlements.I.importBlockReason(AppStore.I.tracks.length) != null) {
+      showPaywallSheet(context,
+          reason: 'Free tier holds ${Entitlements.I.maxTracks} audios');
+      return;
+    }
+    if (!mounted) return;
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      useSafeArea: false,
+      isScrollControlled: true,
+      builder: (_) => const AddReelSheet(),
+    );
   }
 }
 

@@ -73,9 +73,9 @@ It converts ad inventory into something the user chose, which keeps ads from
 feeling like a tax.
 
 > **What is implemented today (`lib/coins.dart` + `lib/shop_sheet.dart`):**
-> **1 coin per completed rewarded video**; the shop has **10 timed perks**:
-> **no ads (24 h / 7 d / 30 d / 90 d)**, **+25 / +50 audio slots (30 d / 90 d)**,
-> **3rd playlist slot (30 d)**, and **custom loop range (7 d / 30 d)**.
+> **1 coin per completed rewarded video**; the shop has **9 timed perks**:
+> **no ads (12 h / 24 h / 7 d / 30 d)**, **+25 / +50 audio slots (30 d)**,
+> **extra playlist slot (30 d)**, and **custom loop range (7 d / 30 d)**.
 > The wallet is local (SharedPreferences) until the SSV ledger exists. The shop,
 > balance and gold "Watch ad" button are **Free-only**; a coin purchase never
 > changes the plan, so they stay visible while a no-ads window is running.
@@ -91,16 +91,22 @@ feeling like a tax.
 ### Shop (all items timed, all expire; costs at 1 coin per ad)
 | Item | Cost | Duration | State |
 |---|---|---|---|
-| No ads | 6 coins | 24 h | **implemented** |
+| No ads | 10 coins | 12 hours | **implemented** |
+| No ads | 15 coins | 24 hours | **implemented** |
 | No ads | 20 coins | 7 days | **implemented** |
-| No ads | 50 coins | 30 days | **implemented** |
-| No ads | 120 coins | 90 days | **implemented** |
+| No ads | 69 coins | 30 days | **implemented** |
 | +25 audio slots | 10 coins | 30 days | **implemented** |
-| +25 audio slots | 25 coins | 90 days | **implemented** |
 | +50 audio slots | 18 coins | 30 days | **implemented** |
-| 3rd playlist slot | 8 coins | 30 days | **implemented** |
+| Extra playlist slot | 8 coins | 30 days | **implemented** |
 | Custom loop range | 4 coins | 7 days | **implemented** |
 | Custom loop range | 12 coins | 30 days | **implemented** |
+
+### Stacking (buy the same perk again)
+Bonus slots and playlists **accumulate**, and the expiry window **extends from
+the previous expiry** (additive days):
+- **+25 slots ×2** → 50 bonus slots for 60 days (cap 75)
+- **+50 slots ×2** → 100 bonus slots for 60 days (cap 125)
+- **Extra playlist ×2** → 2 bonus playlists for 60 days (total 4)
 
 Final numbers **after** you see real eCPM. Because costs are server-side, you
 change prices without shipping an update. Buying an active perk again extends
@@ -120,7 +126,7 @@ ad**. So one coin ≈ **₹0.10–0.35** of revenue.
 That means free coins are cheap goodwill, **not** a Pro replacement. Price every
 shop item so it costs *less* value than the Pro day it imitates — otherwise you
 pay users to avoid paying you. For context: one day of Pro at ₹399/mo is ≈
-₹13, so even the 90-day no-ads perk (120 coins ≈ ₹12–43) stays below a month of
+₹13, so even the 30-day no-ads perk (69 coins ≈ ₹7–24) stays below a month of
 Pro.
 
 ### Storage & anti-tamper
