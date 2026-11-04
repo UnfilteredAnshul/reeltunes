@@ -107,6 +107,14 @@ class SettingsScreen extends StatelessWidget {
                 onChanged: (v) => store.setConfirmDelete(v),
               ),
               SwitchListTile(
+                title: const Text('Confirm before removing'),
+                subtitle: const Text(
+                    'Ask before an audio leaves your library (the file stays '
+                    'on your phone). Covers the track menu and playlist edits.'),
+                value: store.confirmRemove,
+                onChanged: (v) => store.setConfirmRemove(v),
+              ),
+              SwitchListTile(
                 title: const Text('Keep playing during calls'),
                 subtitle: const Text(
                     'Audio keeps playing in the background even when a call '

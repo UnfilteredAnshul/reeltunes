@@ -177,11 +177,15 @@ class _LibraryScreenState extends State<LibraryScreen> {
                     ],
                   ),
                 ),
-          bottomNavigationBar: RtPlayer.I.current == null
-              ? null
-              : MiniBar(
-                  track: RtPlayer.I.current!,
-                  onTap: () => openPlayer(RtPlayer.I.current!)),
+          // Always visible: it keeps the current track one tap away and is the
+          // anchor the free-tier ad strip will sit directly above. With nothing
+          // playing it renders an idle state instead of disappearing.
+          bottomNavigationBar: MiniBar(
+            track: RtPlayer.I.current,
+            onTap: RtPlayer.I.current == null
+                ? null
+                : () => openPlayer(RtPlayer.I.current!),
+          ),
           body: CustomScrollView(
             slivers: [
               if (store.anyArranging)
@@ -370,8 +374,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
     if (choice == null || !mounted) return;
     try {
       final n = choice == 'files'
-          ? await importMediaFiles()
-          : await importMediaFolder();
+          ? await importMediaFiles(context)
+          : await importMediaFolder(context);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(n == 0
@@ -1233,7 +1237,7 @@ Future<void> showTrackMenu(BuildContext context, Track t,
     case _MenuAction.move:
       await showFolderPick(context, t);
     case _MenuAction.remove:
-      removeTrackFromLibrary(context, t);
+      await removeTrackFromLibrary(context, t);
     case _MenuAction.delete:
       await deleteTrackWithConfirm(context, t);
     case null:
@@ -1242,12 +1246,64 @@ Future<void> showTrackMenu(BuildContext context, Track t,
 }
 
 /// Takes a track out of the library without touching the file behind it.
-/// This is the safe default: the audio stays in the audios folder (so a
-/// re-scan would bring it back), and files imported from elsewhere are never
-/// deleted from their original location.
-void removeTrackFromLibrary(BuildContext context, Track t) {
-  AppStore.I.removeTrackKeepFile(t.id);
-  RtPlayer.I.removeIfCurrent(t.id);
+/// Asks first (unless "don't ask again" is set): this is the safe default, and
+/// the audio stays in the audios folder, so a re-scan can bring it back.
+Future<void> removeTrackFromLibrary(BuildContext context, Track t) async {
+  final store = AppStore.I;
+  if (store.confirmRemove) {
+    final dontAsk = ValueNotifier(false);
+    final ok = await showModalBottomSheet<bool>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetCtx) => Padding(
+        padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text('Remove from ReelTunes?',
+                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 18)),
+            const SizedBox(height: 8),
+            Text(
+              '"${t.title}" will leave your library. The audio file stays on '
+              'your phone, and importing the folder again brings it back.',
+              style: Theme.of(sheetCtx).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 8),
+            ValueListenableBuilder<bool>(
+              valueListenable: dontAsk,
+              builder: (c, v, _) => CheckboxListTile(
+                value: v,
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: const Text("Don't ask again"),
+                onChanged: (nv) => dontAsk.value = nv ?? false,
+              ),
+            ),
+            Row(children: [
+              TextButton(
+                onPressed: () => Navigator.pop(sheetCtx, false),
+                child: const Text('Cancel'),
+              ),
+              const Spacer(),
+              FilledButton(
+                onPressed: () {
+                  if (dontAsk.value) store.setConfirmRemove(false);
+                  Navigator.pop(sheetCtx, true);
+                },
+                child: const Text('Remove'),
+              ),
+            ]),
+          ],
+        ),
+      ),
+    );
+    if (ok != true || !context.mounted) return;
+  }
+  store.removeTrackKeepFile(t.id);
+  await RtPlayer.I.removeIfCurrent(t.id);
+  if (!context.mounted) return;
   showTopToast(
       context, 'Removed from ReelTunes. The file is still on your phone.');
 }
@@ -1322,93 +1378,128 @@ Future<void> deleteTrackWithConfirm(BuildContext context, Track t) async {
     }
   } catch (_) {}
   store.removeTrack(t.id);
-  RtPlayer.I.removeIfCurrent(t.id);
+  await RtPlayer.I.removeIfCurrent(t.id);
 }
 
 enum _MenuAction { rearrange, rename, move, remove, delete }
 
 class MiniBar extends StatelessWidget {
-  final Track track;
-  final VoidCallback onTap;
-  const MiniBar({required this.track, required this.onTap});
+  /// Null when nothing has been played yet — the bar still renders (idle
+  /// state) because it is the anchor for the ad strip and for "resume".
+  final Track? track;
+  final VoidCallback? onTap;
+  const MiniBar({required this.track, this.onTap});
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final player = RtPlayer.I;
-    final durMs = player.duration?.inMilliseconds ?? track.durationMs;
     return ListenableBuilder(
-      listenable: player,
-      builder: (context, _) => SafeArea(
-        child: Card(
-          margin: const EdgeInsets.fromLTRB(12, 0, 12, 4),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                dense: true,
-                onTap: onTap,
-                leading: Container(
-                  width: 38,
-                  height: 38,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(8),
-                    color: scheme.surfaceContainerHighest,
+      // AppStore too: a rename in the library or the player must show here
+      // immediately, and the player object alone does not notify on renames.
+      listenable: Listenable.merge([player, AppStore.I]),
+      builder: (context, _) {
+        final t = track ?? player.current;
+        final idle = t == null;
+        final durMs =
+            idle ? 0 : (player.duration?.inMilliseconds ?? t.durationMs);
+        return SafeArea(
+          top: false,
+          child: Card(
+            margin: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  dense: true,
+                  onTap: idle ? null : onTap,
+                  leading: Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(8),
+                      color: scheme.surfaceContainerHighest,
+                    ),
+                    child: Icon(
+                        idle ? Icons.music_off_outlined : Icons.music_note,
+                        color: scheme.onSurfaceVariant),
                   ),
-                  child:
-                      Icon(Icons.music_note, color: scheme.onSurfaceVariant),
+                  title: Text(idle ? 'Nothing playing' : t.title,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: idle ? scheme.onSurfaceVariant : null)),
+                  subtitle: idle
+                      ? Text('Tap a track to start',
+                          style: Theme.of(context).textTheme.labelSmall)
+                      : StreamBuilder<Duration>(
+                          stream: player.positionStream,
+                          builder: (c, pos) => Text(
+                            '${mmss((pos.data ?? Duration.zero).inMilliseconds)} / '
+                            '${durMs > 0 ? mmss(durMs) : '—'}',
+                            style: Theme.of(context).textTheme.labelSmall,
+                          ),
+                        ),
+                  // Skip previous / play-pause / skip next, always reachable
+                  // without opening the full player.
+                  trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      tooltip: 'Previous',
+                      onPressed: idle ? null : () => player.skipPrev(),
+                      icon: const Icon(Icons.skip_previous_rounded),
+                    ),
+                    // Engine-stream-driven so the glyph flips the instant
+                    // playback state changes (never a stale ▶).
+                    StreamBuilder<bool>(
+                      stream: player.playingStream,
+                      initialData: player.playing,
+                      builder: (c, s) {
+                        final isPlaying = s.data ?? false;
+                        return IconButton(
+                          visualDensity: VisualDensity.compact,
+                          tooltip: isPlaying ? 'Pause' : 'Play',
+                          onPressed: idle ? null : () => player.toggle(),
+                          icon: AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 180),
+                            transitionBuilder: (child, anim) => ScaleTransition(
+                              scale: anim,
+                              child: FadeTransition(opacity: anim, child: child),
+                            ),
+                            child: Icon(
+                              isPlaying
+                                  ? Icons.pause_rounded
+                                  : Icons.play_arrow_rounded,
+                              key: ValueKey(isPlaying),
+                              color: scheme.onSurface,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      tooltip: 'Next',
+                      onPressed: idle ? null : () => player.skipNext(),
+                      icon: const Icon(Icons.skip_next_rounded),
+                    ),
+                  ]),
                 ),
-                title: Text(track.title,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w600)),
-                subtitle: StreamBuilder<Duration>(
-                  stream: player.positionStream,
-                  builder: (c, pos) => Text(
-                    '${mmss((pos.data ?? Duration.zero).inMilliseconds)} / '
-                    '${durMs > 0 ? mmss(durMs) : '—'}',
-                    style: Theme.of(context).textTheme.labelSmall,
+                if (!idle)
+                  StreamBuilder<Duration>(
+                    stream: player.positionStream,
+                    builder: (c, pos) {
+                      final p = pos.data?.inMilliseconds ?? 0;
+                      return LinearProgressIndicator(
+                        value: durMs > 0 ? (p / durMs).clamp(0.0, 1.0) : 0,
+                        minHeight: 2,
+                      );
+                    },
                   ),
-                ),
-                // Engine-stream-driven so the pause/play glyph flips the
-                // instant playback state changes (never a stale ▶).
-                trailing: StreamBuilder<bool>(
-                  stream: player.playingStream,
-                  initialData: player.playing,
-                  builder: (c, s) {
-                    final isPlaying = s.data ?? false;
-                    return IconButton(
-                      onPressed: () => player.toggle(),
-                      icon: AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 180),
-                        transitionBuilder: (child, anim) => ScaleTransition(
-                          scale: anim,
-                          child: FadeTransition(opacity: anim, child: child),
-                        ),
-                        child: Icon(
-                          isPlaying
-                              ? Icons.pause_rounded
-                              : Icons.play_arrow_rounded,
-                          key: ValueKey(isPlaying),
-                          color: scheme.onSurface,
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-              StreamBuilder<Duration>(
-                stream: player.positionStream,
-                builder: (c, pos) {
-                  final p = pos.data?.inMilliseconds ?? 0;
-                  return LinearProgressIndicator(
-                    value: durMs > 0 ? (p / durMs).clamp(0.0, 1.0) : 0,
-                    minHeight: 2,
-                  );
-                },
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }
@@ -1489,16 +1580,18 @@ int _addWithinCap(List<Track> picked) {
 }
 
 /// Pick audio/video files (one or many). Returns how many were imported.
-Future<int> importMediaFiles() async {
+Future<int> importMediaFiles([BuildContext? context]) async {
   final picked = await _pickMedia(folder: false);
-  return _addWithinCap(picked);
+  if (context != null && !context.mounted) return 0;
+  return _importPicked(context, picked);
 }
 
 /// Pick a folder and import every audio/video inside it, recursively —
 /// DCIM-style folders keep their clips in sub-folders such as Camera/.
-Future<int> importMediaFolder() async {
+Future<int> importMediaFolder([BuildContext? context]) async {
   final picked = await _pickMedia(folder: true);
-  return _addWithinCap(picked);
+  if (context != null && !context.mounted) return 0;
+  return _importPicked(context, picked);
 }
 
 Future<Track?> importAudioFile([BuildContext? context]) async {
@@ -1507,8 +1600,100 @@ Future<Track?> importAudioFile([BuildContext? context]) async {
   // "Or import an audio file instead".
   final picked = await _pickMedia(folder: false);
   if (picked.isEmpty) return null;
-  final added = _addWithinCap(picked);
+  if (context != null && !context.mounted) return null;
+  final added = await _importPicked(context, picked);
   return added == 0 ? null : picked.first;
+}
+
+/// Adds [picked], asking first when some are already in the library.
+///
+/// Skip  → only new files are added (plus anything the user removed earlier,
+///         which is no longer in the library and comes back).
+/// Add anyway → duplicates become separate entries, like a file manager.
+Future<int> _importPicked(BuildContext? context, List<Track> picked) async {
+  if (picked.isEmpty) return 0;
+  final store = AppStore.I;
+
+  // The same file can appear twice inside one pick; keep the first only.
+  final unique = <Track>[];
+  final seen = <String>{};
+  for (final t in picked) {
+    final key = t.fileName.toLowerCase();
+    if (key.isNotEmpty && !seen.add(key)) continue;
+    unique.add(t);
+  }
+
+  final dupes = unique
+      .where((t) => store.trackByFileName(t.fileName) != null)
+      .length;
+  final restores = unique
+      .where((t) =>
+          t.fileName.isNotEmpty &&
+          store.trackByFileName(t.fileName) == null &&
+          store.hiddenFileNames.contains(t.fileName))
+      .length;
+
+  var skipDupes = true;
+  if (dupes > 0) {
+    if (context == null || !context.mounted) return 0;
+    final addAnyway = await _askDuplicateImport(context, dupes, restores);
+    if (addAnyway == null) return 0; // sheet dismissed = do nothing
+    skipDupes = !addAnyway;
+  }
+
+  final toAdd = skipDupes
+      ? unique
+          .where((t) => store.trackByFileName(t.fileName) == null)
+          .toList()
+      : unique;
+  return _addWithinCap(toAdd);
+}
+
+/// Returns true = add anyway, false = skip duplicates, null = dismissed.
+Future<bool?> _askDuplicateImport(
+    BuildContext context, int dupes, int restores) {
+  return showModalBottomSheet<bool>(
+    context: context,
+    showDragHandle: true,
+    builder: (sheetCtx) => Padding(
+      padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(children: [
+            Icon(Icons.copy_all_outlined,
+                color: Theme.of(sheetCtx).colorScheme.primary),
+            const SizedBox(width: 10),
+            const Expanded(
+              child: Text('Some files are already added',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 18)),
+            ),
+          ]),
+          const SizedBox(height: 8),
+          Text(
+            '$dupes ${dupes == 1 ? 'file is' : 'files are'} already in your '
+            'library.'
+            '${restores > 0 ? ' $restores you removed earlier will be added '
+                'back.' : ''}',
+            style: Theme.of(sheetCtx).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 16),
+          Row(children: [
+            TextButton(
+              onPressed: () => Navigator.pop(sheetCtx, false),
+              child: const Text('Skip duplicates'),
+            ),
+            const Spacer(),
+            FilledButton(
+              onPressed: () => Navigator.pop(sheetCtx, true),
+              child: const Text('Add anyway'),
+            ),
+          ]),
+        ],
+      ),
+    ),
+  );
 }
 
 String _trackId() => 't${DateTime.now().microsecondsSinceEpoch}';

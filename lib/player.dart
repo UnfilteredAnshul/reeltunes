@@ -260,6 +260,9 @@ class RtPlayer extends ChangeNotifier {
   ///   it uses the same range. Short reels (<30 s) get one extra pass.
   int _loopsTarget() {
     final store = AppStore.I;
+    // Play once, then move to the next audio. This is also what deselecting
+    // Smart / Custom range means.
+    if (loop == RtLoop.off) return 1;
     // Custom range is Pro-only. A lapsed subscription falls back to Smart
     // instead of keeping a range the user can no longer edit.
     if (loop == RtLoop.customRange && Entitlements.I.canUseCustomRange) {
@@ -375,7 +378,12 @@ class RtPlayer extends ChangeNotifier {
 
   void _armLoopMode() {
     final ap = _ap;
-    if (ap != null) unawaited(ap.setLoopMode(LoopMode.one));
+    if (ap == null) return;
+    // "Play once" arms the engine off from the start: no position event has to
+    // land in the last 900 ms for a very short clip to advance, and it keeps
+    // working when the app is backgrounded and ticks are sparse.
+    unawaited(
+        ap.setLoopMode(loop == RtLoop.off ? LoopMode.off : LoopMode.one));
   }
 
   void _markManualAdvance() {
@@ -394,6 +402,9 @@ class RtPlayer extends ChangeNotifier {
       _finalPassArmed = false;
       return;
     }
+
+    // Play-once never loops: the engine was armed off when the track loaded.
+    if (loop == RtLoop.off) return;
 
     final d = _ap?.duration;
     if (d == null || d.inMilliseconds <= 0) return;
@@ -484,13 +495,57 @@ class RtPlayer extends ChangeNotifier {
     }
   }
 
-  /// If the playing track was deleted from the library, stop gracefully.
-  void removeIfCurrent(String id) {
-    if (current?.id != id) return;
-    if (_booted) _ap!.stop();
-    current = null;
-    queueIndex = -1;
-    notifyListeners();
+  /// A track was removed from the library. Keep playing: the queue drops the
+  /// item and, if it was the one playing, the next one starts instead of
+  /// silence. (Previously this stopped the player dead.)
+  Future<void> removeIfCurrent(String id) async {
+    final idx = queue.indexWhere((t) => t.id == id);
+    if (idx < 0) {
+      if (current?.id == id) {
+        current = null;
+        if (_booted) await _ap!.stop();
+        _silentFire();
+      }
+      return;
+    }
+    final wasCurrent = current?.id == id;
+    _markManualAdvance();
+    // Remove from the loaded playlist first so the engine's indices and
+    // `queue` stay in step; otherwise the next skip would land on the wrong
+    // item.
+    if (_booted && _ap != null) {
+      try {
+        await _ap!.removeAudioSourceAt(idx);
+      } catch (e) {
+        debugPrint('queue remove failed: $e');
+      }
+    }
+    queue.removeAt(idx);
+    if (queue.isEmpty) {
+      current = null;
+      queueIndex = -1;
+      if (_booted) await _ap!.stop();
+      _silentFire();
+      return;
+    }
+    if (idx < queueIndex) queueIndex--;
+    queueIndex = queueIndex.clamp(0, queue.length - 1);
+    if (wasCurrent) {
+      current = queue[queueIndex];
+      if (_booted && _ap != null) {
+        try {
+          // The removed item may have been the last one in the queue, which
+          // leaves the engine parked at its end (or stopped). Land on the item
+          // that took its place, from the start.
+          await _ap!.seek(Duration.zero, index: queueIndex);
+        } catch (e, s) {
+          reportError('advance after remove failed', e, s);
+        }
+      }
+      _newTrackLoops();
+      if (_booted) unawaited(_ap!.play());
+    }
+    _silentFire();
   }
 
   void _silentFire() => notifyListeners();

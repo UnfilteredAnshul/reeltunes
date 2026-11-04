@@ -12,6 +12,7 @@ import 'entitlements.dart';
 import 'extraction_errors.dart';
 import 'extractor.dart';
 import 'library.dart';
+import 'link_rules.dart';
 import 'models.dart';
 import 'player.dart';
 import 'top_toast.dart';
@@ -107,6 +108,8 @@ class _AddReelSheetState extends State<AddReelSheet> {
           keyboardType: TextInputType.url,
           decoration: const InputDecoration(
             hintText: 'https://vt.tiktok.com/…',
+            helperText: 'YouTube Shorts, Instagram Reels, Facebook or TikTok',
+            helperMaxLines: 2,
             prefixIcon: Icon(Icons.link),
           ),
         ),
@@ -152,7 +155,7 @@ class _AddReelSheetState extends State<AddReelSheet> {
         ),
         const SizedBox(height: 4),
         TextButton.icon(
-          onPressed: importAudioFile,
+          onPressed: () => importAudioFile(context),
           icon: const Icon(Icons.folder_open),
           label: const Text('Or import an audio file instead'),
         ),
@@ -166,13 +169,70 @@ class _AddReelSheetState extends State<AddReelSheet> {
     );
   }
 
+  /// "This link is already saved as …" → true means add a second copy.
+  Future<bool> _confirmDuplicateLink(Track existing) async {
+    final add = await showModalBottomSheet<bool>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetCtx) => Padding(
+        padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(children: [
+              Icon(Icons.copy_all_outlined,
+                  color: Theme.of(sheetCtx).colorScheme.primary),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text('Already in your library',
+                    style:
+                        TextStyle(fontWeight: FontWeight.w600, fontSize: 18)),
+              ),
+            ]),
+            const SizedBox(height: 8),
+            Text(
+              'This link is already saved as "${existing.title}". Add a second '
+              'copy, or skip it?',
+              style: Theme.of(sheetCtx).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 16),
+            Row(children: [
+              TextButton(
+                onPressed: () => Navigator.pop(sheetCtx, false),
+                child: const Text('Skip'),
+              ),
+              const Spacer(),
+              FilledButton(
+                onPressed: () => Navigator.pop(sheetCtx, true),
+                child: const Text('Add anyway'),
+              ),
+            ]),
+          ],
+        ),
+      ),
+    );
+    return add == true;
+  }
+
   Future<void> _extract() async {
     final url = urlCtrl.text.trim();
     if (url.isEmpty || working) return;
+    // Reject anything the engine cannot handle before it spends 30 s failing.
+    final problem = linkProblem(url);
+    if (problem != null) {
+      showTopToast(context, problem, error: true);
+      return;
+    }
     if (!AppStore.I.audiosLinked) {
       showTopToast(context, 'Link your audios folder first (Settings).');
       return;
     }
+    // Same reel pasted twice: offer the skip/keep choice instead of silently
+    // creating a second copy.
+    final existing = AppStore.I.trackBySourceUrl(url);
+    if (existing != null && !await _confirmDuplicateLink(existing)) return;
+    if (!mounted) return;
     // Check the cap before the engine runs: never download a file the library
     // is not allowed to list.
     if (Entitlements.I.importBlockReason(AppStore.I.tracks.length) != null) {
@@ -263,7 +323,9 @@ class _AddReelSheetState extends State<AddReelSheet> {
                 label: const Text('Import the audio file instead'),
                 onPressed: () async {
                   Navigator.pop(sheetCtx);
-                  await importAudioFile();
+                  // The Add-reel sheet is still on screen, so its context can
+                  // host the duplicate warning if the file is already saved.
+                  await importAudioFile(context);
                 },
               ),
             ],
@@ -482,13 +544,60 @@ Future<void> showFolderPick(BuildContext context, Track t) {
           ),
           const SizedBox(height: 8),
           FilledButton(
-            onPressed: () {
+            onPressed: () async {
+              final removed =
+                  t.folderIds.where((id) => !picked.contains(id)).length;
+              if (removed > 0 && AppStore.I.confirmRemove) {
+                final ok = await _confirmPlaylistRemoval(sheetCtx, removed);
+                if (ok != true || !sheetCtx.mounted) return;
+              }
               AppStore.I.setTrackFolders(t.id, picked.toList());
               Navigator.pop(sheetCtx);
             },
             child: const Text('Save'),
           ),
         ]),
+      ),
+    ),
+  );
+}
+
+/// Confirm taking a track out of one (or more) playlists. Shares the
+/// "Confirm before removing" setting rather than adding a second one.
+Future<bool?> _confirmPlaylistRemoval(BuildContext context, int count) {
+  return showModalBottomSheet<bool>(
+    context: context,
+    showDragHandle: true,
+    builder: (sheetCtx) => Padding(
+      padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text('Remove from playlist?',
+              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 18)),
+          const SizedBox(height: 8),
+          Text(
+            count == 1
+                ? 'This audio will leave the playlist you unticked. The audio '
+                    'itself stays in your library.'
+                : 'This audio will leave $count playlists you unticked. The '
+                    'audio itself stays in your library.',
+            style: Theme.of(sheetCtx).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 16),
+          Row(children: [
+            TextButton(
+              onPressed: () => Navigator.pop(sheetCtx, false),
+              child: const Text('Cancel'),
+            ),
+            const Spacer(),
+            FilledButton(
+              onPressed: () => Navigator.pop(sheetCtx, true),
+              child: const Text('Remove'),
+            ),
+          ]),
+        ],
       ),
     ),
   );
@@ -833,7 +942,7 @@ class _PlayerSheetState extends State<PlayerSheet> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return ListenableBuilder(
-      listenable: RtPlayer.I,
+      listenable: Listenable.merge([RtPlayer.I, AppStore.I]),
       builder: (context, _) {
         final player = RtPlayer.I;
         final t = player.current ?? widget.track;
@@ -914,9 +1023,19 @@ class _PlayerSheetState extends State<PlayerSheet> {
                   scrollDirection: Axis.horizontal,
                   children: [
                     _LoopChip(
+                      label: 'Play once',
+                      selected: player.loop == RtLoop.off,
+                      onTap: () => player.setLoop(RtLoop.off),
+                    ),
+                    const SizedBox(width: 4),
+                    _LoopChip(
                       label: '✨ Smart (auto)',
                       selected: player.loop == RtLoop.smart,
-                      onTap: () => player.setLoop(RtLoop.smart),
+                      // Tapping the active mode switches looping off, so the
+                      // audio plays once and the queue moves on.
+                      onTap: () => player.setLoop(player.loop == RtLoop.smart
+                          ? RtLoop.off
+                          : RtLoop.smart),
                     ),
                     const SizedBox(width: 4),
                     _LoopChip(
@@ -925,6 +1044,10 @@ class _PlayerSheetState extends State<PlayerSheet> {
                           '${Entitlements.I.canUseCustomRange ? '' : ' · Pro'}',
                       selected: player.loop == RtLoop.customRange,
                       onTap: () {
+                        if (player.loop == RtLoop.customRange) {
+                          player.setLoop(RtLoop.off);
+                          return;
+                        }
                         if (!Entitlements.I.canUseCustomRange) {
                           showPaywallSheet(context,
                               reason: 'Custom loop range is Pro');
@@ -933,7 +1056,6 @@ class _PlayerSheetState extends State<PlayerSheet> {
                         _openRangePicker();
                       },
                     ),
-
                   ],
                 ),
               ),
@@ -989,7 +1111,7 @@ class _PlayerSheetState extends State<PlayerSheet> {
                           : null,
                       onPressed: () => player.setLoop(
                           player.loop == RtLoop.infinite
-                              ? RtLoop.smart
+                              ? RtLoop.off
                               : RtLoop.infinite),
                       icon: Icon(player.loop == RtLoop.infinite
                           ? Icons.repeat_on

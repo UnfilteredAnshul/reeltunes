@@ -11,12 +11,13 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'entitlements.dart';
+import 'link_rules.dart';
 
 enum AppThemeMode { system, light, dark }
 
 enum ViewMode { list, grid }
 
-enum RtLoop { smart, customRange, infinite }
+enum RtLoop { off, smart, customRange, infinite }
 
 enum SortBy { manual, name, dateAdded }
 
@@ -53,6 +54,9 @@ class Track {
   /// are matched, and it is what the metadata mirror stores (URIs do not
   /// survive a reinstall, names do).
   String fileName;
+  /// The link this track was extracted from (`''` for imports). Used to stop
+  /// the same reel being added twice.
+  String sourceUrl;
   int durationMs; // filled after the first successful load
   List<String> folderIds;
   int addedAtMs; // epoch ms of import; 0 for tracks added before this field
@@ -63,6 +67,7 @@ class Track {
     required this.source,
     required this.path,
     this.fileName = '',
+    this.sourceUrl = '',
     this.durationMs = 0,
     int? addedAtMs,
     List<String>? folderIds,
@@ -75,6 +80,7 @@ class Track {
         'source': source,
         'path': path,
         'fileName': fileName,
+        'sourceUrl': sourceUrl,
         'durationMs': durationMs,
         'addedAtMs': addedAtMs,
         'folderIds': folderIds,
@@ -86,6 +92,7 @@ class Track {
         source: m['source'] ?? 'import',
         path: m['path'],
         fileName: m['fileName'] ?? '',
+        sourceUrl: m['sourceUrl'] ?? '',
         durationMs: (m['durationMs'] ?? 0) as int,
         addedAtMs: (m['addedAtMs'] ?? 0) as int,
         folderIds: List<String>.from(m['folderIds'] ?? const []),
@@ -141,6 +148,7 @@ class AppStore extends ChangeNotifier {
 
   // per-feature prefs
   bool confirmDelete = true; // ask before deleting a track
+  bool confirmRemove = true; // ask before removing a track from the library
   bool playDuringCalls = false; // keep audio playing when a call comes in
   SortBy sortBy = SortBy.manual; // manual = user-drag order (tracks)
   bool sortAsc = true; // ascending when sortBy != manual
@@ -197,6 +205,7 @@ class AppStore extends ChangeNotifier {
     if (rangeMin < 1) rangeMin = 1;
     if (rangeMax < rangeMin) rangeMax = rangeMin;
     confirmDelete = _prefs.getBool('confirmDelete') ?? true;
+    confirmRemove = _prefs.getBool('confirmRemove') ?? true;
     playDuringCalls = _prefs.getBool('playDuringCalls') ?? false;
     sortBy = SortBy.values[_prefs.getInt('sortBy') ?? 0];
     sortAsc = _prefs.getBool('sortAsc') ?? true;
@@ -237,6 +246,7 @@ class AppStore extends ChangeNotifier {
     _prefs.setInt('rangeMin', rangeMin);
     _prefs.setInt('rangeMax', rangeMax);
     _prefs.setBool('confirmDelete', confirmDelete);
+    _prefs.setBool('confirmRemove', confirmRemove);
     _prefs.setBool('playDuringCalls', playDuringCalls);
     _prefs.setInt('sortBy', sortBy.index);
     _prefs.setBool('sortAsc', sortAsc);
@@ -351,6 +361,7 @@ class AppStore extends ChangeNotifier {
   void setSaveFolder(String p) => _mutateSetting(() => saveFolder = p);
 
   void setConfirmDelete(bool v) => _mutateSetting(() => confirmDelete = v);
+  void setConfirmRemove(bool v) => _mutateSetting(() => confirmRemove = v);
   void setPlayDuringCalls(bool v) => _mutateSetting(() => playDuringCalls = v);
   void setSortBy(SortBy s) => _mutateSetting(() => sortBy = s);
   void setSortAsc(bool v) => _mutateSetting(() => sortAsc = v);
@@ -573,6 +584,25 @@ class AppStore extends ChangeNotifier {
 
   Track? trackById(String id) =>
       tracks.where((t) => t.id == id).firstOrNull;
+
+  /// Existing track saved from the same link, ignoring tracking parameters.
+  Track? trackBySourceUrl(String url) {
+    final key = canonicalLink(url);
+    for (final t in tracks) {
+      if (t.sourceUrl.isNotEmpty && canonicalLink(t.sourceUrl) == key) return t;
+    }
+    return null;
+  }
+
+  /// Existing track for an imported file, matched by name the same way the
+  /// folder scan and the mirror do.
+  Track? trackByFileName(String fileName) {
+    final key = fileName.toLowerCase();
+    for (final t in tracks) {
+      if (t.fileName.toLowerCase() == key) return t;
+    }
+    return null;
+  }
 }
 
 String mmss(int ms) {

@@ -4,7 +4,7 @@
 - **Name:** ReelTunes · `applicationId com.buildwithanshul.reeltunes` (permanent — cannot change after the first Play upload) · Dart package `reel_tune` · project folder `E:\Projects\ReelTune`.
 - **What it is:** Android Flutter music player for short-form video audio. Paste a TikTok / Instagram Reel / YouTube Shorts link → audio is extracted **on-device** by a bundled CPython + yt-dlp engine → the file is written into the user's own audios folder and played offline with loop/shuffle controls. Also imports existing phone media through SAF (videos play their own audio, nothing copied).
 - **Pitch:** 100% on-device library. No cloud, no login, no server, no database. The audios folder is the source of truth: drop a song in with a file manager and it appears; uninstall the app and the files plus a portable copy of the playlists stay behind.
-- **Status (2026-11-03):** **debug build with free/Pro gating, RevenueCat billing and promo codes was built (156.9 MB) and installed over wireless adb** (`adb-PBFIINYP7LGE4PPV-Sgk2he._adb-tls-connect._tcp`) on the Realme RMX3381 (ColorOS, Android 13 / SDK 33); it launches to the library. Engine still runs end-to-end (Python → SSL → yt-dlp 2026.10.26). Since the last doc: free/Pro gating (`lib/entitlements.dart` — trial clock, 25 audios / 2 playlists, Smart 3–6, custom-range paywall, 3-day and 1-day trial reminders, debug tier switches), RevenueCat billing (`lib/billing.dart` + paywall/Settings), and **promo codes phase 1** (`lib/promo.dart` + `lib/redeem_sheet.dart` + `lib/code_admin.dart`: local registry, redemption log, in-app dashboard, `ANSHUL2012` / `FREEVERSION` debug codes, signed-server swap planned in `docs/promo-codes.md` §12). **Device test of the new screens pending.**
+- **Status (2026-11-04):** **debug build (157 MB) rebuilt and installed over wireless adb** (`adb-PBFIINYP7LGE4PPV-Sgk2he._adb-tls-connect._tcp`) on the Realme RMX3381 (ColorOS, Android 13 / SDK 33). This batch (user-requested playback/import/UX fixes): **"Play once" loop mode** (`RtLoop.off`; deselecting Smart / Custom range means play once then advance — Pro and trial alike), **duplicate protection** for re-added links (`Track.sourceUrl` + canonical URL match) and re-imported folders/files (file-manager-style Skip / Add anyway sheet; Skip adds only files that were removed earlier), **confirmation before every remove** (track menu and playlist untick, "Don't ask again" + Settings switch `confirmRemove`), **rename hot reload** in the player sheet/mini bar, **removing/deleting the playing track advances to the next audio** instead of stopping, **mini player bar always visible** (idle state when nothing plays — anchor for the sticky ad strip) with prev / play-pause / next, and **link validation** (`lib/link_rules.dart`: `https` only, YouTube Shorts / Instagram Reels / Facebook / TikTok allowlist). Earlier in the same cycle: free/Pro gating (`lib/entitlements.dart`), RevenueCat billing (`lib/billing.dart` + paywall/Settings), promo codes phase 1 (`lib/promo.dart` + `lib/redeem_sheet.dart` + `lib/code_admin.dart`; `ANSHUL2012` / `FREEVERSION` debug codes). **Device test of this batch pending (user tests).**
 - **Production status:** internal debug only. No release signing, no AAB, no ads, no Play Console products, no privacy policy yet. See "Production readiness (open)".
 
 ## Tech Stack
@@ -32,14 +32,15 @@
 No SQL. Two local stores + one mirrored file:
 1. **`library.json`** (app documents dir, `app_flutter/library.json`) — fast local source of truth:
    ```json
-   { "tracks": [ { "id","title","source","path","fileName","durationMs","addedAtMs","folderIds": ["f…"] } ],
+   { "tracks": [ { "id","title","source","path","fileName","sourceUrl","durationMs","addedAtMs","folderIds": ["f…"] } ],
      "folders": [ { "id","name","emoji" } ] }
    ```
    - `path` is a **`content://` URI** (audios folder or SAF import) — no raw paths since the SAF change.
    - `fileName` is the bridge between the folder and the library, and the key used by the mirror/restore.
+   - `sourceUrl` is the original link (empty for imports); duplicate-link detection compares `canonicalLink(sourceUrl)` (host+path, no scheme/query), so `?igsh=…`/`utm_*` variants count as the same reel.
    - `source`: `'TikTok' | 'YouTube' | 'Instagram' | 'web'` (extracted) · `'file' | 'video'` (imported).
-2. **`.reeltunes-library.json`** inside the audios folder — portable mirror (folders + `{name,title,source,durationMs,addedAtMs,folderIds}` + `trialStartMs` + `grant {untilMs,lifetime,code}`). Written ~700 ms after every library change and after a code redeem; read back on the first launch after a reinstall, matched to files by name.
-3. **SharedPreferences:** `themeMode`, `folderView`, `trackView`, `saveFolder` (legacy display string), `firstRunDone`, `rangeMin/rangeMax`, `confirmDelete(true)`, `playDuringCalls`, `sortBy`, `sortAsc`, `guideBannerDismissed`, `playlistsExpanded` (session), `loopHistory` (last 12 custom-range counts), **`hiddenFileNames`** (files removed with "Remove from ReelTunes" — stops a folder scan from re-adding them), `trialStartMs`, `proPurchased/proTrial/proWillRenew/proEndsMs/proProductId`, **`grantUntilMs/grantLifetime/grantCode`** (code grants), `promoCodes`, `promoLog`, `promoDeviceId`, `adminUnlocked`.
+2. **`.reeltunes-library.json`** inside the audios folder — portable mirror (folders + `{name,title,source,sourceUrl,durationMs,addedAtMs,folderIds}` + `trialStartMs` + `grant {untilMs,lifetime,code}`). Written ~700 ms after every library change and after a code redeem; read back on the first launch after a reinstall, matched to files by name.
+3. **SharedPreferences:** `themeMode`, `folderView`, `trackView`, `saveFolder` (legacy display string), `firstRunDone`, `rangeMin/rangeMax`, `confirmDelete(true)`, **`confirmRemove(true)`** (remove-from-library + playlist-removal confirmation), `playDuringCalls`, `sortBy`, `sortAsc`, `guideBannerDismissed`, `playlistsExpanded` (session), `loopHistory` (last 12 custom-range counts), **`hiddenFileNames`** (files removed with "Remove from ReelTunes" — stops a folder scan from re-adding them), `trialStartMs`, `proPurchased/proTrial/proWillRenew/proEndsMs/proProductId`, **`grantUntilMs/grantLifetime/grantCode`** (code grants), `promoCodes`, `promoLog`, `promoDeviceId`, `adminUnlocked`.
    - Android-side prefs (`reeltunes_folder`): SAF tree URI + resolved root document id.
    - Not persisted on purpose: search text, date filter.
 
@@ -48,7 +49,8 @@ No SQL. Two local stores + one mirrored file:
 - **Why:** Android 13+ denies raw paths in Download/DCIM/Movies even with `READ_MEDIA_*` (verified: `touch /sdcard/Download/...` → permission denied as the app UID). SAF is the only Play-safe route.
 - **Save path:** yt-dlp writes into the app cache → `FolderBridge.save` copies bytes into the folder (optionally a playlist sub-folder). The cache copy is deleted.
 - **Discovery:** `LibrarySync.sync()` runs on launch and on `AppLifecycleState.resumed` — files added by a file manager appear, files deleted outside the app disappear (only entries under the linked tree are considered).
-- **Remove vs delete:** "Remove from ReelTunes" unlists and remembers `fileName`; "Delete audio and file" asks once (checkbox + Settings switch `confirmDelete`) and deletes the document.
+- **Remove vs delete:** "Remove from ReelTunes" unlists and remembers `fileName` (confirmed by default; "Don't ask again" + Settings switch `confirmRemove`); "Delete audio and file" asks once (checkbox + Settings switch `confirmDelete`) and deletes the document. Removing or deleting the track that is playing advances to the next audio — playback does not stop.
+- **Duplicate protection:** importing a folder/files again opens a file-manager-style sheet. **Skip duplicates** adds only files that are no longer in the library (i.e. the ones the user removed earlier); **Add anyway** creates separate entries. Re-pasting a saved link asks the same question before extraction.
 - **Reinstall:** the grant is revoked by Android, so the user links the same folder once → mirror restores playlists/titles/order, scan restores files.
 
 ## Engine (extraction)
@@ -59,17 +61,17 @@ No SQL. Two local stores + one mirrored file:
 - **Dart side:** `lib/engine.dart` (channel wrapper), `lib/extractor.dart` (naming, cache→folder save, Track creation). **yt-dlp updates only ship through Play releases**, never at runtime.
 
 ## Auth Flow
-None. `AppStore.I.fullPro` is hard-coded `true`; free/Pro gating contract in `play-compliance.md` / `docs/free-vs-pro.md`. Ads/Play Billing not started.
+None — no account, no login. Playback/library access is anonymous. The plan (Free / trial / Pro) comes from `lib/entitlements.dart` (trial clock + store state + code grants); purchases go through RevenueCat → Play Billing (`lib/billing.dart`). Contract in `play-compliance.md` / `docs/free-vs-pro.md`.
 
 ## Routing (screens)
 - **RootScreen (main.dart)** — instant `runApp`; store init + ≥1.4 s splash; `LibrarySync.init()` (grant → restore → scan); first-run `FirstRunSheet` (folder picker) when nothing is linked; share-intent listener; lifecycle observer re-scans on resume.
-- **LibraryScreen (library.dart)** — AppBar: search toggle · New playlist · Settings. FAB column: import pill (icon ↔ "Import audio") above "Add reel"; while rearranging, a single "Save order" FAB. Body: rearrange banner → guide bar → chip strip → `Playlists (N)` + collapse (+ list/grid toggle only when expanded) → playlists (grid/list, drag-reorder) → new-playlist row → tracks header (`All audios (N)` / `In "<name>" (N)`, sort+filter, view toggle) → track list/grid → bottom spacer. MiniBar when something plays; tap opens the player without restarting the queue.
-- **PlayerSheet (sheets.dart)** — playing-from caption, title, source, slider, ✨ Smart / Custom range chips, animated transport (shuffle, prev, play/pause, next, repeat ∞).
-- **AddReelSheet** — URL (+`initialUrl` from share), optional name, playlist multi-select, "Extract & save audio", "Or import an audio file instead". Refuses to run when no folder is linked ("Link your audios folder first").
+- **LibraryScreen (library.dart)** — AppBar: search toggle · New playlist · Settings. FAB column: import pill (icon ↔ "Import audio") above "Add reel"; while rearranging, a single "Save order" FAB. Body: rearrange banner → guide bar → chip strip → `Playlists (N)` + collapse (+ list/grid toggle only when expanded) → playlists (grid/list, drag-reorder) → new-playlist row → tracks header (`All audios (N)` / `In "<name>" (N)`, sort+filter, view toggle) → track list/grid → bottom spacer. **MiniBar is always mounted** — the current track when something plays, an idle "Nothing playing" row otherwise — so the free-tier banner ad has a fixed anchor directly above it. Tap opens the player without restarting the queue.
+- **PlayerSheet (sheets.dart)** — playing-from caption, title, source, slider, loop chips (**Play once** / ✨ Smart / Custom range; tapping the active Smart/range chip deselects to Play once), animated transport (shuffle, prev, play/pause, next, repeat ∞). The sheet listens to `AppStore` as well as the player, so a rename from its top-right menu updates the title instantly.
+- **AddReelSheet** — URL (+`initialUrl` from share), optional name, playlist multi-select, "Extract & save audio", "Or import an audio file instead". Refuses to run when no folder is linked ("Link your audios folder first"). Rejects unsupported links before extraction (`linkProblem`) and asks Skip / Add anyway when the same link is already saved.
 - **Track long-press menu** — Rearrange (grid) · Rename · Manage playlists · **Remove from ReelTunes** (keeps the file) · **Delete audio and file** (red, confirmed).
 - **Folder/playlist long-press menu** — Rearrange (grid) · Shuffle · Rename · Edit emoji · Delete.
-- **Settings** — Guide card (top) · Appearance · Storage (audios folder, re-scan, uninstall explanation) · Playback (confirm before delete, keep playing during calls) · Support (mailto bug report) · Account.
-- **Sort & filter sheet**, **Guide sheet**, **Folder create sheet**, **Delete confirm sheet** (with "Don't ask again").
+- **Settings** — Guide card (top) · Appearance · Storage (audios folder, re-scan, uninstall explanation) · Playback (confirm before delete, **confirm before removing**, keep playing during calls) · Support (mailto bug report) · Account.
+- **Sort & filter sheet**, **Guide sheet**, **Folder create sheet**, **Delete confirm sheet**, **Remove confirm sheet** (both with "Don't ask again"), **duplicate import/link sheets** (Skip / Add anyway).
 
 ## Components / Lib (per file)
 ### lib/entitlements.dart
@@ -77,21 +79,24 @@ None. `AppStore.I.fullPro` is hard-coded `true`; free/Pro gating contract in `pl
 ### lib/billing.dart
 - RevenueCat wrapper. `init()` (no-op without `RC_ANDROID_KEY`), `refresh()`, `loadOfferings()`, `planView(plan)` / `annualSaving` (prices come from Play, never constants), `packageFor(plan)` (dashboard slot → package type → product id), `purchase`, `purchasePlan`, `restore`, `_mapError` (Play error code → one sentence), `_apply(CustomerInfo)` → `Entitlements.setStoreEntitlement`. `PurchaseReport{success,cancelled,pending,unavailable,failed}`.
 ### lib/models.dart
-- `Track {id,title,source,path,fileName,durationMs,folderIds,addedAtMs}` + JSON; `Folder {id,name,emoji}`.
-- Enums: `AppThemeMode`, `ViewMode`, `RtLoop{smart,customRange,infinite}`, `SortBy`, `DateFilter`.
-- `AppStore.I`: tracks/folders, prefs, `selectedFolderId`, session search/date filter, `playlistsExpanded`, `guideBannerDismissed`, `hiddenFileNames`, audios-folder state (`audiosLinked/audiosUri/audiosName/audiosWritable`), `onLibrarySaved` hook (mirror), loop learning (`loopHistory`, `recordLoopCount`, `learnedLoopCount`), grid rearrange state, `_baseVisible()` / `visibleTracksSorted`, `reorderVisibleTracks`, `addTrack` (un-hides a name), `removeTrackKeepFile`, `save()` (local JSON + mirror).
+- `Track {id,title,source,path,fileName,sourceUrl,durationMs,folderIds,addedAtMs}` + JSON; `Folder {id,name,emoji}`.
+- Enums: `AppThemeMode`, `ViewMode`, `RtLoop{off,smart,customRange,infinite}`, `SortBy`, `DateFilter`.
+- `AppStore.I`: tracks/folders, prefs (`confirmDelete`, `confirmRemove`), `selectedFolderId`, session search/date filter, `playlistsExpanded`, `guideBannerDismissed`, `hiddenFileNames`, audios-folder state (`audiosLinked/audiosUri/audiosName/audiosWritable`), `onLibrarySaved` hook (mirror), loop learning (`loopHistory`, `recordLoopCount`, `learnedLoopCount`), grid rearrange state, `_baseVisible()` / `visibleTracksSorted`, `reorderVisibleTracks`, `trackById`, **`trackBySourceUrl`** (canonical-link match), **`trackByFileName`** (case-insensitive), `addTrack` (un-hides a name), `removeTrackKeepFile`, `save()` (local JSON + mirror).
 ### lib/folder_access.dart
 - Thin Dart wrapper for the `com.buildwithanshul.reeltunes/folder` channel: `state`, `link`, `unlink`, `scan`, `save`, `readText`, `writeText`, `delete`; models `LinkedFolder`, `FolderFile`.
 ### lib/library_sync.dart
-- `init` (grant → restore → scan), `link`, `unlink`, `sync` (add new files, update URIs, drop vanished files, map sub-folders to playlists), `mirror` (debounced portable snapshot), `restoreIfEmpty`.
+- `init` (grant → restore → scan), `link`, `unlink`, `sync` (add new files, update URIs, drop vanished files, map sub-folders to playlists), `mirror` (debounced portable snapshot including `sourceUrl`), `restoreIfEmpty`.
 ### lib/player.dart — `RtPlayer.I`
 - Boot law: `JustAudioBackground.init()` before any `AudioPlayer`; all ops through `_whenReady()`.
 - `_sourceFor`: `path.contains('://')` → `AudioSource.uri` (everything today), else `AudioSource.file`.
-- Looping: every track armed `LoopMode.one`; `positionStream` wrap counts passes; final pass flips to `LoopMode.off`; `_targetLoops` random in `rangeMin..rangeMax` (Smart samples `loopHistory`, +1 under 30 s); queue end → seek(0) + play.
+- Looping: with a loop mode active every track is armed `LoopMode.one`; `positionStream` wrap counts passes; final pass flips to `LoopMode.off`; `_targetLoops` random in `rangeMin..rangeMax` (Smart samples `loopHistory`, +1 under 30 s); queue end → seek(0) + play. **`RtLoop.off` (Play once) arms `LoopMode.off` immediately when the track loads**, so even sub-2 s clips advance without waiting for a position tick in the margin.
 - `unawaited(_ap.play())` everywhere (the future completes when playback stops).
-- Gapless `skipNext/skipPrev`, `_loadFailures` guard, engine-stream listeners for the glyphs, interruptions via `audio_session`, `removeIfCurrent`.
+- Gapless `skipNext/skipPrev`, `_loadFailures` guard, engine-stream listeners for the glyphs, interruptions via `audio_session`.
+- **`removeIfCurrent(id)`** removes the item from the loaded playlist and from `queue`; if it was playing, it seeks/plays the item that took its place (or stops only when the queue is empty). Used by both "Remove from ReelTunes" and "Delete audio and file".
 ### lib/extractor.dart
-- `extractAndAdd(store,url,{title,folderIds,onStatus})`: `Engine.getVideoInfo` → sanitised name → yt-dlp into the cache → `FolderAccess.save` into the linked folder (playlist sub-folder when chosen) → Track with `fileName`, URI path, duration.
+- `extractAndAdd(store,url,{title,folderIds,onStatus})`: `Engine.getVideoInfo` → sanitised name → yt-dlp into the cache → `FolderAccess.save` into the linked folder (playlist sub-folder when chosen) → Track with `fileName`, `sourceUrl` (the pasted link), URI path, duration.
+### lib/link_rules.dart
+- `linkProblem(raw)` → null or one actionable sentence: `https` only, ≤2048 chars, and only **YouTube Shorts** (`/shorts/`, `youtu.be`), **Instagram Reels** (`/reel/`, `/reels/`, `/p/`), **Facebook** (`fb.watch`, `/reel`, `/share/`, `/videos/`, `/watch`), **TikTok** (`*.tiktok.com`). Also `linkAllowed`, `linkRejectedMessage`, and `canonicalLink` (lower-case host+path, `www.` and trailing `/` stripped) used as the duplicate identity.
 ### lib/engine.dart
 - Method-channel wrapper for `getVideoInfo`, `downloadAudio` (progress + cancel), `cancel`.
 ### lib/extraction_errors.dart
@@ -99,13 +104,13 @@ None. `AppStore.I.fullPro` is hard-coded `true`; free/Pro gating contract in `pl
 ### lib/top_toast.dart
 - Overlay-based top toast (`showTopToast`), single instance, slide+fade, tap to dismiss.
 ### lib/library.dart
-- Home screen, chip strip, playlist header/collapse, sort+filter sheet, guide bar, idle FAB, rearrange modes, track/playlist menus, `removeTrackFromLibrary`, `deleteTrackWithConfirm`, MiniBar, SAF import (`_pickMedia`, `importMediaFiles`, `importMediaFolder`, `importAudioFile`).
+- Home screen, chip strip, playlist header/collapse, sort+filter sheet, guide bar, idle FAB, rearrange modes, track/playlist menus, **`removeTrackFromLibrary`** (confirmed, keeps the file), `deleteTrackWithConfirm`, **always-mounted MiniBar** (idle state, prev / play-pause / next, listens to `AppStore` for renames), SAF import (`_pickMedia`, `importMediaFiles`, `importMediaFolder`, `importAudioFile`), **`_importPicked` / `_askDuplicateImport`** (Skip / Add anyway, restores only previously removed files).
 ### lib/sheets.dart
-- `AddReelSheet`, `PlayerSheet`, range picker (bottom sheet), playlist sheets/menus, guide sheet (`_GuideStep` ×7), emoji picker, `showInputSheet`, `showPaywallSheet` (stateless shell + `_PaywallSheetState`: live Play prices, yearly/monthly cards, purchase/restore/manage, `_PlanCard`), `showTrialReminderSheet`.
+- `AddReelSheet` (link validation + duplicate-link sheet), `PlayerSheet` (loop chips incl. Play once; `Listenable.merge([RtPlayer.I, AppStore.I])` so renames hot-reload), range picker (bottom sheet), playlist sheets/menus (**playlist-removal confirmation** sharing `confirmRemove`), guide sheet (`_GuideStep` ×7), emoji picker, `showInputSheet`, `showPaywallSheet` (stateless shell + `_PaywallSheetState`: live Play prices, yearly/monthly cards, purchase/restore/manage, `_PlanCard`), `showTrialReminderSheet`.
 ### lib/main.dart
 - `main()` (instant `runApp`, error reporting, deferred audio-service warm-up), `RootScreen` (splash, `LibrarySync`, `Billing.init()` after the library is up, first-run sheet, share intents, lifecycle re-scan + `Billing.refresh()`), `FirstRunSheet`, `CoinLoader`.
 ### lib/settings_screen.dart
-- Guide card, appearance radios, storage block (link folder / re-scan / uninstall copy), playback switches, feedback mailto, live Pro card (`ListenableBuilder` on `Entitlements`), "Redeem a code" row, "Code dashboard" row (debug builds, or once a master code unlocked the device), "Restore purchases" row, debug tier section.
+- Guide card, appearance radios, storage block (link folder / re-scan / uninstall copy), playback switches (**confirm before delete**, **confirm before removing**, keep playing during calls), feedback mailto, live Pro card (`ListenableBuilder` on `Entitlements`), "Redeem a code" row, "Code dashboard" row (debug builds, or once a master code unlocked the device), "Restore purchases" row, debug tier section.
 ### lib/promo.dart
 - `PromoEngine` (ChangeNotifier singleton): normalise (`uppercase`, strip `space - _`), local code registry (`promoCodes`), redemption log (`promoLog`, 500 rows), per-device once check on `promoDeviceId`, grant application through `Entitlements.setCodeGrant`. Built-ins `ANSHUL2012` (lifetime Pro + unlocks dashboard) and `FREEVERSION` (clears store/debug/grant **and** ends the trial) are inside `kDebugMode` branches, so release builds compile them out. `createCode/setRevoked/deleteCode/revokeAll/clearLog`. `redeem()` is the single UI entry point and the future `/redeem` swap point.
 ### lib/redeem_sheet.dart
@@ -134,6 +139,7 @@ $adb = "E:\Android\Sdk\platform-tools\adb.exe"
 & $adb -s "<serial>" install -r build\app\outputs\flutter-apk\app-debug.apk
 & $adb -s "<serial>" shell am start -n com.buildwithanshul.reeltunes/.MainActivity
 ```
+- **Last build:** 2026-11-04 — `flutter build apk --debug` (157 MB) + `adb install -r` succeeded on the wireless serial above. Installed, not device-tested by the agent (the user tests).
 - **No build without explicit approval.** The user runs device tests; the agent reads logcat (`adb logcat -d | Select-String "extraction failed|Saved"`).
 - **Device access:** Wireless debugging is the default now. Pair once with `adb pair <ip>:<pair-port> <code>`, then `adb connect <ip>:<connect-port>`; the connect port changes every time Wireless debugging is toggled, and mDNS pairing exposes a serial like `adb-PBFIINYP7LGE4PPV-Sgk2he._adb-tls-connect._tcp`. USB shows the bare `PBFIINYP7LGE4PPV`.
 - Release plan `--release --split-per-abi` (~40 MB arm64) untested; `flutter build appbundle` never run.
@@ -165,6 +171,10 @@ $adb = "E:\Android\Sdk\platform-tools\adb.exe"
 24. **Media notification survived Recents swipe** — `onTaskRemoved()` is a no-op upstream. Patched in the fork to `stop()`.
 25. **Mojibake in `library.dart`** — a PowerShell rewrite re-encoded the file (`â€”`, `Â·`, `â€¦`, `â–¶`, `ðŸŽ§`, `âž•`). Fixed by byte-level replacement; scan the repo for `[\u00C2\u00C3\u00C5\u00E2\u00F0\uFFFD]` after any shell-based file edit.
 26. **Do not use `Set-Content -Encoding utf8` on Dart sources** — on this setup it produced the mojibake above. Use `[System.IO.File]::WriteAllText(path, text, UTF8Encoding($false))`.
+27. **Rename is display-only** — `AppStore.renameTrack` changes the library/player title; the audio/video file on disk keeps its old name (and the `MediaItem` tag keeps the old title until the next track loads, so the notification can lag one track behind).
+28. **Removing the playing track stopped playback** — `removeIfCurrent` now drops the item from `removeAudioSourceAt(idx)` *and* `queue`, seeks to the replacement index and plays; it only stops when the queue is empty. Both remove and delete call it.
+29. **Mini bar was conditional** — it is now always mounted (`track` nullable, idle row) so the free-tier banner ad has a stable slot above it and the bar's prev/play/next stay reachable.
+30. **`use_build_context_synchronously` after awaits** — guard `context.mounted` before `showModalBottomSheet`/toast/`Navigator.pop`; file import helpers take an optional `BuildContext?` so a closed picker never shows a sheet on a dead context.
 
 ## Design Decisions
 - **On-device bundled engine, no runtime code downloads** — CPython + yt-dlp ride in the APK; updates ship through Play.
@@ -175,6 +185,8 @@ $adb = "E:\Android\Sdk\platform-tools\adb.exe"
 - **Reference imports, never copies** — SAF imports point at the original document URI and are never deleted.
 - **Generic user-facing failures** — one plain sentence; precise reason in logcat.
 - **Platform repeat-one for looping** rather than Dart timers (works backgrounded/screen-off).
+- **"Play once" is the off state of the loop model** (`RtLoop.off`): the active Smart / Custom-range chip toggles back to it, the repeat icon toggles infinite ↔ off, and the player arms `LoopMode.off` up front so short clips advance reliably.
+- **Duplicate identity is content-shaped, not row-shaped:** links compare `canonicalLink(sourceUrl)` (scheme/query stripped), files compare `fileName` case-insensitively. "Skip" therefore re-adds exactly what is missing — including items the user had removed — which is what a file manager's duplicate prompt implies.
 - **Smart learns from Custom** — rolling 12-entry history of completed custom-range sessions.
 - **Infinite loop only via the repeat icon.**
 - **Vendored dependency over a refactor** — the two `just_audio_background` bugs were fixed in a local fork rather than replacing the media-session layer with a custom `audio_service` handler, to avoid destabilising playback right before release.
@@ -189,7 +201,7 @@ $adb = "E:\Android\Sdk\platform-tools\adb.exe"
 - Release signing (debug key today), upload keystore / Play App Signing, AAB.
 - **Play Console: create `reeltunes_pro_monthly` / `reeltunes_pro_annual` (7-day free trial offer), then RevenueCat dashboard: entitlement `pro`, offering `default`, packages `$rc_monthly` / `$rc_annual`, Play service-account JSON. Build with `--dart-define RC_ANDROID_KEY=goog_…`.** Until both exist, the paywall says "Pro isn't live yet".
 - Ads: AdMob + UMP consent for EEA/UK (plan + slot rules in `docs/ads.md`); ads must be reflected in the privacy policy and Data Safety.
-- Content-rights consent sheet + Settings toggle; link validation (`https` only, host allowlist, length cap).
+- Content-rights consent sheet + Settings toggle. **Link validation is done** (`lib/link_rules.dart`: `https` only, YouTube Shorts / Instagram Reels / Facebook / TikTok allowlist).
 - Generic branding in listing/screenshots (no platform names or logos); in-app licences screen (LICENSES/ already shipped in repo).
 - `allowBackup=false` + `dataExtractionRules` (or a deliberate backup story) — audit before release.
 - Privacy policy, Data Safety answers, store listing assets.
@@ -209,7 +221,7 @@ E:\Projects\ReelTune\
 │  └─ FolderBridge.kt                        # SAF audios folder: link/scan/save/text/delete
 ├─ lib/
 │  ├─ main.dart · library.dart · sheets.dart · player.dart
-│  ├─ models.dart · extractor.dart · engine.dart · library_sync.dart · folder_access.dart
+│  ├─ models.dart · extractor.dart · engine.dart · library_sync.dart · folder_access.dart · link_rules.dart
 │  ├─ entitlements.dart                       # trial / free caps / Pro (single source of truth)
 │  ├─ billing.dart                            # RevenueCat: configure, offerings, purchase, restore
 │  ├─ promo.dart · redeem_sheet.dart · code_admin.dart   # codes: registry, redeem sheet, in-app dashboard

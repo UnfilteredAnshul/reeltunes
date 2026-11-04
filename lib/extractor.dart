@@ -98,6 +98,7 @@ class Extractor {
       source: source,
       path: uri,
       fileName: fileName,
+      sourceUrl: url,
       durationMs: ((info.durationSeconds ?? 0) * 1000).round(),
       addedAtMs: DateTime.now().millisecondsSinceEpoch,
       folderIds: List.of(folderIds),
