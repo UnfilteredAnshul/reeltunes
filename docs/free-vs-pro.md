@@ -102,15 +102,15 @@ feeling like a tax.
 | Custom loop range | 12 coins | 30 days | **implemented** |
 
 ### Stacking (buy the same perk again)
-Bonus slots and playlists **accumulate**, and the expiry window **extends from
-the previous expiry** (additive days):
-- **+25 slots ×2** → 50 bonus slots for 60 days (cap 75)
-- **+50 slots ×2** → 100 bonus slots for 60 days (cap 125)
-- **Extra playlist ×2** → 2 bonus playlists for 60 days (total 4)
+Bonus slots and playlists **accumulate** across purchases, but the expiry
+window does **not** extend:
+- **+25 slots ×2** → 50 bonus slots for 30 days (cap 75)
+- **+50 slots ×2** → 100 bonus slots for 30 days (cap 125)
+- **Extra playlist ×2** → 2 bonus playlists for 30 days (total 4)
 
 Final numbers **after** you see real eCPM. Because costs are server-side, you
-change prices without shipping an update. Buying an active perk again extends
-it instead of resetting the clock.
+change prices without shipping an update. Buying an active perk again adds its
+benefit but does not push the expiry further out.
 
 ### Ad-free is a pause, not a plan change
 `Entitlements.showAds` is `capped && !CoinWallet.adFree` (where `adFree` is true

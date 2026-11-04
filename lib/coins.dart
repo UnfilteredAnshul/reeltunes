@@ -245,17 +245,19 @@ class CoinWallet extends ChangeNotifier {
     return true;
   }
 
-  /// Buy [p]. Stacks additively: bonus tracks/playlists accumulate, and the
-  /// expiry window extends from the previous expiry (additive days).
+  /// Buy [p]. Bonus slots/playlists **accumulate** across purchases, but the
+  /// expiry window does **not** extend — buying the same perk again while it's
+  /// active keeps the original expiry (no time stacking).
   Future<bool> buyPerk(CoinPerk p) async {
     if (!await spend(p.cost)) return false;
     final now = DateTime.now();
-    final base = isPerkActive(p.id)
-        ? DateTime.fromMillisecondsSinceEpoch(_perkExpiry[p.id]!)
-        : now;
-    // Extend from the previous expiry, never from now — so days stack.
-    final expiry = base.add(p.duration);
-    _perkExpiry[p.id] = expiry.millisecondsSinceEpoch;
+    // Only set a new expiry when the perk isn't already active. When it is,
+    // keep the existing expiry so days never stack.
+    if (!isPerkActive(p.id)) {
+      final expiry = now.add(p.duration);
+      _perkExpiry[p.id] = expiry.millisecondsSinceEpoch;
+    }
+    // Always stack the count (bonus tracks/playlists accumulate).
     _perkCount[p.id] = (perkCount(p.id) + 1);
     await _savePerk(p.id);
     _scheduleExpiry();
