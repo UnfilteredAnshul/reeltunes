@@ -17,17 +17,14 @@ import 'player.dart';
 import 'promo.dart';
 import 'sheets.dart';
 
-void main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
   installErrorReporting(); // failures land in logcat AND as on-screen toasts
-  // Media-session service must be ready before the app builds — but never
-  // block the launch forever. ColorOS can be slow or fail to init the
-  // background audio service; degrade gracefully after 8 s.
-  await RtPlayer.I.ensureBackgroundService().timeout(
-    const Duration(seconds: 8),
-    onTimeout: () => debugPrint('audio service init timed out — degrading to in-app playback'),
-  );
+  // App opens INSTANTLY — nothing blocking before runApp().
   runApp(const ReelTuneApp());
+  // Media-session service warms up in the background; RtPlayer guarantees it
+  // has completed before the first play() (see RtPlayer.ensureBackgroundService).
+  RtPlayer.I.ensureBackgroundService();
 }
 
 class ReelTuneApp extends StatefulWidget {

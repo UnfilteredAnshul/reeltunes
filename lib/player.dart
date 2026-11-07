@@ -73,33 +73,15 @@ class RtPlayer extends ChangeNotifier {
   }
 
   /// Media-session service setup + player creation. Started right after
-  /// runApp() — never blocks the app launch.
-  Future<void> ensureBackgroundService() async {
-    if (_bgInit != null) return _bgInit;
-    // Retry up to 3 times — ColorOS can be flaky initializing the background
-    // audio service on first attempt. Each attempt has a 10 s timeout so a
-    // hung init never blocks the app launch forever.
-    for (var attempt = 1; attempt <= 3; attempt++) {
-      try {
-        _bgInit = JustAudioBackground.init(
-          androidNotificationChannelId: 'com.buildwithanshul.reeltunes.playback',
-          androidNotificationChannelName: 'ReelTunes playback',
-          androidNotificationOngoing: true,
-          androidStopForegroundOnPause: false,
-        );
-        await _bgInit!.timeout(const Duration(seconds: 5));
-        debugPrint('JustAudioBackground.init succeeded (attempt $attempt)');
-        return _bgInit!;
-      } catch (e, s) {
-        debugPrint('JustAudioBackground.init attempt $attempt failed: $e');
-        if (attempt == 3) {
-          reportError('audio service init failed after 3 attempts', e, s);
-          _bgInit = null; // allow retry next time
-        }
-        await Future.delayed(const Duration(milliseconds: 500));
-      }
-    }
-  }
+  /// runApp() — never blocks the app launch. ColorOS can fail on first
+  /// attempt; retries happen lazily on the next play() via _boot().
+  Future<void> ensureBackgroundService() =>
+      _bgInit ??= JustAudioBackground.init(
+        androidNotificationChannelId: 'com.buildwithanshul.reeltunes.playback',
+        androidNotificationChannelName: 'ReelTunes playback',
+        androidNotificationOngoing: true,
+        androidStopForegroundOnPause: false,
+      );
 
   Future<void> _boot() async {
     try {
