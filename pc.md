@@ -305,7 +305,7 @@ E:\Projects\ReelTune\
 ## Skills & MCPs
 - **Skills:** `apple-design`, `savefile` (this file + vault copy), `vault` (session/bug logs), `multi-author-commits` (commit rules), `opencode`, plus the Cloudflare skill set (22 skills: `wrangler`, `cloudflare`, `workers-*`, `agents-sdk`, `cf-cli`, …) installed to `~/.agents/skills`.
 - **MCP:** `cloudflare` (remote, `https://mcp.cloudflare.com/mcp`, OAuth) configured in `~/.config/opencode/opencode.jsonc`. Account `d77090059bcf2448a72aab38cb9a3617`. Read-only scopes in the MCP grant; deploys run through `npx wrangler deploy`.
-- **Commit rules (owner `UnfilteredAnshul`):** author = Anshul (`anshul091103@gmail.com`) on every commit. Committer alternates between **Simran Rajpal** and **Shreya Rajpal** on every other commit, so history shows both: 24 Simran / 23 Shreya as of 8 Nov. Never push unless explicitly asked; tokens in Credential Manager only.
+- **Commit rules (owner `UnfilteredAnshul`):** author = Anshul (`anshul091103@gmail.com`) on every commit. Committer is assigned at random per commit, split evenly between **Simran Rajpal** and **Shreya Rajpal** (24 / 24 as of 8 Nov), so neither name looks scripted. Never push unless explicitly asked; tokens in Credential Manager only.
 - **Identity trap:** the git identity is `Simran Rajpal <contact.simran.rajpal@gmail.com>`. `Simran Kaur` and `buildwithsimran@gmail.com` are wrong (`buildwithsimran` is only a GitHub username).
 
 ## Remaining work (bugs + features)
