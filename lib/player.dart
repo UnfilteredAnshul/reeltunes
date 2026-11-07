@@ -77,7 +77,8 @@ class RtPlayer extends ChangeNotifier {
   Future<void> ensureBackgroundService() async {
     if (_bgInit != null) return _bgInit;
     // Retry up to 3 times — ColorOS can be flaky initializing the background
-    // audio service on first attempt.
+    // audio service on first attempt. Each attempt has a 10 s timeout so a
+    // hung init never blocks the app launch forever.
     for (var attempt = 1; attempt <= 3; attempt++) {
       try {
         _bgInit = JustAudioBackground.init(
@@ -86,7 +87,7 @@ class RtPlayer extends ChangeNotifier {
           androidNotificationOngoing: true,
           androidStopForegroundOnPause: false,
         );
-        await _bgInit;
+        await _bgInit!.timeout(const Duration(seconds: 5));
         debugPrint('JustAudioBackground.init succeeded (attempt $attempt)');
         return _bgInit!;
       } catch (e, s) {
@@ -94,12 +95,10 @@ class RtPlayer extends ChangeNotifier {
         if (attempt == 3) {
           reportError('audio service init failed after 3 attempts', e, s);
           _bgInit = null; // allow retry next time
-          rethrow;
         }
         await Future.delayed(const Duration(milliseconds: 500));
       }
     }
-    throw Exception('JustAudioBackground.init failed after 3 attempts');
   }
 
   Future<void> _boot() async {
