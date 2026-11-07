@@ -6,3 +6,7 @@
 
 const String privacyPolicyUrl =
     'https://reeltunes-privacy.buildwise.workers.dev/';
+
+/// Terms of service, same host as the policy.
+const String termsOfServiceUrl =
+    'https://reeltunes-privacy.buildwise.workers.dev/terms';
