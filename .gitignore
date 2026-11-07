@@ -57,3 +57,10 @@ android/key.properties
 # Locally installed agent skills (Android skills CLI)
 .agents/
 .scratch/
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example
