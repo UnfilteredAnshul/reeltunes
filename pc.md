@@ -195,6 +195,22 @@ $adb = "E:\Android\Sdk\platform-tools\adb.exe"
    - **App stuck on loading**: `main()` was changed to `async` and `await`ed `JustAudioBackground.init()` before `runApp()`. On ColorOS (Realme RMX3381), `JustAudioBackground.init()` hangs indefinitely, so the app never reached `runApp()` and stayed stuck on a blank/loading screen. **Reverted:** `main()` is back to fire-and-forget (`runApp()` first, `ensureBackgroundService()` after).
    - **Audio handler error 81018634 on play + stutter on loop boundaries**: `_onPosition()` was rewritten with wrap-detection logic that fired on every position tick and set `LoopMode.off` immediately when `_passes >= _targetLoops`, causing ExoPlayer errors. **Reverted:** `_onPosition()` is back to the original margin-based logic (only fires near end of track within margin, sets `LoopMode.off` on final pass only). `_finalPassArmed` field restored.
    - `ensureBackgroundService()` returns the lazy `??=` arrow — init happens on first `play()`, not at launch. Audio handler init errors degrade to plain in-app playback via `_boot()`'s try/catch.
+39. **"Source error (0)" — audios present but unplayable** — Android dropped the persisted SAF read grant for the linked folder (reinstall, system permission reset, OEM clean-up). `stateMap()` still said `linked: true` because the tree URI was in our prefs, `scan()` swallowed the SecurityException into `[]`, and `sync()` returned early without touching paths — so the library looked fine while every `content://` path was dead. Fixed:
+   - `FolderBridge.probe()` — checks `persistedUriPermissions` for the saved tree *and* runs a real query on the root.
+   - `LibrarySync.sync()` sets `AppStore.folderAccessLost` when a linked folder yields an empty scan that the probe cannot explain.
+   - Startup + resume: "Reconnect your audios folder" dialog → `LibrarySync.link(preferDefault: true)` restores the grant; the rescan rewrites every path. Settings row shows "Access expired".
+   - Playback: on a failed load, probe first; if the folder is unreachable, show a plain "reconnect" message and **stop** instead of skipping through the whole queue with the same error.
+40. **Playlist counts / new playlists didn't refresh** — `const _FoldersGrid()` / `const _FoldersList()` are identical across rebuilds, so Flutter skipped them; only collapsing and expanding the section forced a rebuild. Removed `const` at both call sites.
+41. **Notification player was killed by swiping the app from Recents** — the vendored `just_audio_background` patch called `stop()` in `onTaskRemoved()`. Changed to stop only when paused, so playback and the media notification/ lock-screen player survive the swipe (Spotify-style).
+42. **No media notification at all on Android 13+** — `POST_NOTIFICATIONS` was never declared or requested. Added to the manifest and requested in `MainActivity.onCreate`.
+
+## Release build (internal testing)
+- Upload keystore: `android/upload-keystore.jks` (alias `upload`), credentials in `android/key.properties`. Both gitignored — **back them up**, losing the upload key means a Play support request.
+- `flutter build appbundle --release --dart-define=RC_ANDROID_KEY=goog_… --dart-define=ADMOB_TEST_ADS=true`
+- RevenueCat key: dashboard → Project settings → API keys → *Google Play* public app-specific key (`goog_…`). Without it `Billing.androidKey` is empty, the store is disabled and the paywall says Pro isn't live.
+- For internal testing keep `ADMOB_TEST_ADS=true` (never tap live ads); drop that define for the production build.
+- Installing the Play build over the current debug build requires an uninstall (different signing key) → app data resets and the folder must be re-linked once. The mirror restores playlists.
+- Play updates (same package + signature) keep the SAF grant, so users don't re-link after a normal update.
 
 ## Design Decisions
 - **On-device bundled engine, no runtime code downloads** — CPython + yt-dlp ride in the APK; updates ship through Play.
