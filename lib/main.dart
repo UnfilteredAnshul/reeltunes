@@ -16,6 +16,7 @@ import 'notification_service.dart';
 import 'player.dart';
 import 'promo.dart';
 import 'sheets.dart';
+import 'top_toast.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -78,6 +79,7 @@ class RootScreen extends StatefulWidget {
 class _RootScreenState extends State<RootScreen>
     with WidgetsBindingObserver {
   bool ready = false;
+  bool _relinkPromptShown = false;
 
   @override
   void initState() {
@@ -114,6 +116,9 @@ class _RootScreenState extends State<RootScreen>
         );
       }
       if (mounted) setState(() => ready = true);
+      // A folder whose grant was dropped makes every audio unplayable; ask for
+      // the same folder right away instead of failing on the first tap.
+      unawaited(_maybePromptRelink());
       // App-open ad (Free only, max once per 4 h). It waits briefly for the
       // preloaded unit and silently gives up when there is no fill.
       unawaited(Ads.I.maybeShowAppOpen());
@@ -130,6 +135,49 @@ class _RootScreenState extends State<RootScreen>
   /// when the build has no store key. Everything gated reads `Entitlements`,
   /// which is a `ChangeNotifier`, so the UI corrects itself.
   Future<void> _syncStore() => Billing.I.init();
+
+  /// One-tap repair for a lapsed SAF grant. Android drops the persisted folder
+  /// permission on reinstall, a system permission reset or an OEM clean-up;
+  /// the library then shows every audio but none of them can be opened. Asking
+  /// for the same folder again restores the grant and the rescan rewrites all
+  /// stored paths. Shown at most once per session unless the user declines.
+  Future<void> _maybePromptRelink() async {
+    if (_relinkPromptShown || !mounted) return;
+    if (!AppStore.I.folderAccessLost) return;
+    _relinkPromptShown = true;
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        title: const Text('Reconnect your audios folder'),
+        content: const Text(
+            'Android reset access to your ReelTunes folder. Your audios are '
+            'still on your phone — reconnect the same folder to play them '
+            'again.\n\nYour playlists and settings are saved.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx, false),
+            child: const Text('Not now'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogCtx, true),
+            child: const Text('Reconnect'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (go != true) {
+      _relinkPromptShown = false; // allow the next scan to ask again
+      return;
+    }
+    final picked = await LibrarySync.link(preferDefault: true);
+    if (!mounted) return;
+    if (picked != null && picked.linked) {
+      showTopToast(context, 'Folder reconnected');
+    } else {
+      _relinkPromptShown = false;
+    }
+  }
 
   /// Shows the trial-ending sheet when one is due and marks it as seen.
   Future<void> _maybeTrialReminder() async {
@@ -151,6 +199,7 @@ class _RootScreenState extends State<RootScreen>
       LibrarySync.refreshState().then((_) async {
         await LibrarySync.sync();
         await _maybeTrialReminder();
+        await _maybePromptRelink();
       });
     }
   }

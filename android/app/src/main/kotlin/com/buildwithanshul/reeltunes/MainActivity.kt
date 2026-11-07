@@ -3,6 +3,7 @@ package com.buildwithanshul.reeltunes
 import android.app.Activity
 import android.content.Intent
 import android.net.Uri
+import android.os.Bundle
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import com.ryanheise.audioservice.AudioServiceActivity
@@ -26,6 +27,21 @@ class MainActivity : AudioServiceActivity() {
     private var pendingMedia: MethodChannel.Result? = null
     private var engine: EngineBridge? = null
     private var folder: FolderBridge? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        // Android 13+ hides the media notification until this grant exists.
+        // Denying it does not stop playback, only the shade/lock-screen player.
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(
+                arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),
+                REQUEST_NOTIFICATIONS
+            )
+        }
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -259,6 +275,7 @@ private val MEDIA_EXTENSIONS = setOf(
 private const val MEDIA_CHANNEL = "com.buildwithanshul.reeltunes/media"
 private const val REQUEST_FILES = 4312
 private const val REQUEST_FOLDER = 4313
+private const val REQUEST_NOTIFICATIONS = 4315
 private const val AUDIO_SERVICE_MEDIA_BUTTON_RECEIVER =
     "com.ryanheise.audioservice.MediaButtonReceiver"
 private const val ACTION_NOTIFICATION_DELETE =

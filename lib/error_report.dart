@@ -18,16 +18,24 @@ final GlobalKey<ScaffoldMessengerState> rootMessengerKey =
 
 bool _toastInFlight = false;
 
-void reportError(String context, Object error, StackTrace? stack) {
+void reportError(String context, Object error, StackTrace? stack,
+    {String? userMessage}) {
   final full = context.isEmpty ? '$error' : '$context: $error';
   debugPrint('⚠️ $full\n${stack ?? ''}');
+  // Release builds never show exception text to users: it is noise, and it
+  // leaks file paths, plugin internals and stack details. Dev builds keep the
+  // full detail so problems stay diagnosable on the device. Callers can pass a
+  // plain-language [userMessage] for problems the user can act on.
+  final shown = kDebugMode
+      ? full
+      : (userMessage ?? 'Something went wrong. Please try again.');
   if (_toastInFlight) return; // error storms show one toast, not a cascade
   _toastInFlight = true;
   Future<void>.microtask(() async {
     try {
       rootMessengerKey.currentState?.showSnackBar(SnackBar(
-        content:
-            Text(full.length > 400 ? '${full.substring(0, 400)}…' : full),
+        content: Text(
+            shown.length > 400 ? '${shown.substring(0, 400)}…' : shown),
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 10),
       ));

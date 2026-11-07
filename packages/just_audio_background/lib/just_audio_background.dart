@@ -715,12 +715,13 @@ class _PlayerAudioHandler extends BaseAudioHandler
             min(ShuffleModeMessage.values.length - 1, shuffleMode.index)]));
   }
 
-  /// ReelTunes patch: swiping the app out of Recents must take the media
-  /// notification with it. The upstream default is a no-op, so the
-  /// notification (and its "mini player") outlived the task.
+  /// ReelTunes patch: swiping the app out of Recents must NOT stop the music.
+  /// The task goes away, the foreground service (and the media notification /
+  /// lock-screen player) keeps running — Spotify-style. If the app is swiped
+  /// away while paused, the notification is dismissed so it can't linger.
   @override
   Future<void> onTaskRemoved() async {
-    await stop();
+    if (!_playing) await stop();
   }
 
   @override

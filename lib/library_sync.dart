@@ -71,12 +71,25 @@ class LibrarySync {
 
   /// Merges the folder into the library. Returns how many tracks were added.
   static Future<int> sync() async {
-    if (!folder.linked) return 0;
+    if (!folder.linked) {
+      AppStore.I.setFolderAccessLost(false);
+      return 0;
+    }
     final files = await FolderAccess.scan();
     if (files.isEmpty) {
+      // "Linked" only means we still have the tree URI saved. If the grant is
+      // gone, every read fails and the scan comes back empty — the library
+      // then looks fine while every content:// path is dead. Probe tells that
+      // apart from an genuinely empty folder so the UI can offer a re-link
+      // instead of letting playback fail with "Source error".
+      final hasContentUris =
+          AppStore.I.tracks.any((t) => t.path.startsWith('content://'));
+      final lost = hasContentUris && !await FolderAccess.probe();
+      AppStore.I.setFolderAccessLost(lost);
       AppStore.I.setFolderOverflow(0);
       return 0;
     }
+    AppStore.I.setFolderAccessLost(false);
 
     final store = AppStore.I;
     final entitlements = Entitlements.I;

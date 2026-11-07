@@ -68,6 +68,19 @@ class FolderAccess {
     }
   }
 
+  /// True when the saved folder still resolves (grant alive + root readable).
+  /// False means the library entries are fine but their content:// paths are
+  /// dead until the user re-links the folder.
+  static Future<bool> probe() async {
+    try {
+      return await _channel.invokeMethod<bool>('probe') ?? false;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException {
+      return false;
+    }
+  }
+
   /// Opens the folder picker. Returns null when the user backs out.
   /// [preferDefault] parks the picker on Download (where the app folder lives).
   static Future<LinkedFolder?> link({bool preferDefault = false}) async {

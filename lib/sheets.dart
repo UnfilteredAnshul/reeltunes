@@ -508,9 +508,9 @@ Future<String?> showInputSheet(
   );
 }
 
-/// Multi-select folder membership for a track. Save applies the full set.
+/// Multi-select folder membership for a track. Every tick applies instantly —
+/// there is no Save step.
 Future<void> showFolderPick(BuildContext context, Track t) {
-  final picked = {for (final id in t.folderIds) id};
   return showModalBottomSheet<void>(
     context: context,
     showDragHandle: true,
@@ -527,7 +527,7 @@ Future<void> showFolderPick(BuildContext context, Track t) {
                   .titleLarge
                   ?.copyWith(fontWeight: FontWeight.w600)),
           const SizedBox(height: 8),
-          Text('"${t.title}" can live in several playlists at once.',
+          Text('Tap a playlist to add or remove — it saves straight away.',
               style: Theme.of(sheetCtx).textTheme.bodySmall),
           const SizedBox(height: 8),
           Flexible(
@@ -541,9 +541,21 @@ Future<void> showFolderPick(BuildContext context, Track t) {
                   ),
                 for (final f in AppStore.I.folders)
                   CheckboxListTile(
-                    value: picked.contains(f.id),
-                    onChanged: (v) => setSheetState(() =>
-                        v == true ? picked.add(f.id) : picked.remove(f.id)),
+                    value: t.folderIds.contains(f.id),
+                    onChanged: (v) async {
+                      final add = v == true;
+                      if (!add && AppStore.I.confirmRemove) {
+                        final ok = await _confirmPlaylistRemoval(sheetCtx, 1);
+                        if (ok != true || !sheetCtx.mounted) return;
+                      }
+                      final next = <String>[
+                        for (final id in t.folderIds)
+                          if (id != f.id) id,
+                        if (add) f.id,
+                      ];
+                      AppStore.I.setTrackFolders(t.id, next);
+                      setSheetState(() {});
+                    },
                     title: Text('${f.emoji} ${f.name}'),
                   ),
                 // Manage-folders doubles as a creation point: open the
@@ -558,20 +570,6 @@ Future<void> showFolderPick(BuildContext context, Track t) {
                 ),
               ]),
             ),
-          ),
-          const SizedBox(height: 8),
-          FilledButton(
-            onPressed: () async {
-              final removed =
-                  t.folderIds.where((id) => !picked.contains(id)).length;
-              if (removed > 0 && AppStore.I.confirmRemove) {
-                final ok = await _confirmPlaylistRemoval(sheetCtx, removed);
-                if (ok != true || !sheetCtx.mounted) return;
-              }
-              AppStore.I.setTrackFolders(t.id, picked.toList());
-              Navigator.pop(sheetCtx);
-            },
-            child: const Text('Save'),
           ),
         ]),
       ),

@@ -191,6 +191,17 @@ class AppStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// True when the linked audios folder stopped answering: Android dropped the
+  /// persisted SAF grant (reinstall, permission reset, OEM clean-up), so every
+  /// stored content:// path is dead until the user re-picks the folder.
+  /// Never a deletion — the files are still on the phone.
+  bool folderAccessLost = false;
+  void setFolderAccessLost(bool v) {
+    if (folderAccessLost == v) return;
+    folderAccessLost = v;
+    notifyListeners();
+  }
+
   late SharedPreferences _prefs;
   File? _libFile;
 

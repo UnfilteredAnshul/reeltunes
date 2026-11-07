@@ -17,6 +17,8 @@ import 'package:just_audio_background/just_audio_background.dart';
 
 import 'entitlements.dart';
 import 'error_report.dart';
+import 'folder_access.dart';
+import 'library_sync.dart';
 import 'models.dart';
 
 class RtPlayer extends ChangeNotifier {
@@ -83,7 +85,7 @@ class RtPlayer extends ChangeNotifier {
         androidNotificationChannelId: 'com.buildwithanshul.reeltunes.playback',
         androidNotificationChannelName: 'ReelTunes playback',
         androidNotificationOngoing: true,
-        androidStopForegroundOnPause: false,
+        androidStopForegroundOnPause: true,
       );
 
   Future<void> _boot() async {
@@ -227,6 +229,20 @@ class RtPlayer extends ChangeNotifier {
       unawaited(_ap!.play());
       _loadFailures = 0;
     } catch (e, s) {
+      // A lapsed SAF grant looks exactly like a broken file: the audios are
+      // on disk, but every content:// path fails to open ("Source error").
+      // Skipping would cascade this error through the whole queue, so check
+      // the folder first and ask for a re-link instead.
+      if (await _folderAccessLost()) {
+        reportError(
+            'audios folder lost access',
+            e,
+            s,
+            userMessage: 'Your audios folder needs reconnecting. '
+                'Tap Settings → Audios folder.');
+        _silentFire();
+        return;
+      }
       reportError('play failed for "${t.title}"', e, s);
       _loadFailures++;
       // Skip a broken file instead of hanging the queue — but once every
@@ -235,6 +251,15 @@ class RtPlayer extends ChangeNotifier {
       if (_loadFailures <= queue.length) skipNext();
     }
     _silentFire();
+  }
+
+  /// True when the audios folder itself stopped answering. A lapsed SAF grant
+  /// (reinstall, system permission reset, OEM clean-up) makes every
+  /// content:// row fail to open while the files stay on disk — the player
+  /// sees "Source error" and the user sees files that "can't play".
+  Future<bool> _folderAccessLost() async {
+    if (!LibrarySync.folder.linked) return false;
+    return !await FolderAccess.probe();
   }
 
   /// Stores a track's duration the first time the engine knows it. Without
@@ -383,6 +408,7 @@ class RtPlayer extends ChangeNotifier {
   // never switches it off.
   void _newTrackLoops() {
     _passes = 0;
+    _finalPassArmed = false;
     _lastPos = Duration.zero;
     _targetLatched = _durationSecondsHint() > 0;
     _targetLoops = _loopsTarget();

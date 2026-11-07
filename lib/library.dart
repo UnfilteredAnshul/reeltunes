@@ -253,9 +253,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
                   ),
                 ),
               if (store.playlistsExpanded && store.folderView == ViewMode.grid)
-                const _FoldersGrid()
+                // NOT const: `const` instances are identical across rebuilds,
+                // so Flutter skips them and the audio counts / newly created
+                // playlists only refreshed when the section was collapsed and
+                // expanded again.
+                _FoldersGrid()
               else if (store.playlistsExpanded) ...[
-                const _FoldersList(),
+                _FoldersList(),
                 const SliverToBoxAdapter(child: _NewFolderRow()),
               ],
               SliverPadding(

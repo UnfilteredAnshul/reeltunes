@@ -68,14 +68,19 @@ class SettingsScreen extends StatelessWidget {
               const _Section('Storage'),
               ListTile(
                 title: const Text('Audios folder'),
-                subtitle: Text(store.audiosLinked
-                    ? '${store.audiosName} · saved audios, playlists and any '
-                        'file you drop in live here'
-                    : 'Not linked yet — choose the folder where audios are '
-                        'saved. It survives uninstall and reinstalls.'),
-                trailing: Icon(store.audiosLinked
-                    ? Icons.folder_rounded
-                    : Icons.folder_copy_outlined),
+                subtitle: Text(store.folderAccessLost
+                    ? 'Access expired — tap to reconnect the same folder. '
+                        'Your audios are still on your phone.'
+                    : store.audiosLinked
+                        ? '${store.audiosName} · saved audios, playlists and any '
+                            'file you drop in live here'
+                        : 'Not linked yet — choose the folder where audios are '
+                            'saved. It survives uninstall and reinstalls.'),
+                trailing: Icon(store.folderAccessLost
+                    ? Icons.error_outline
+                    : store.audiosLinked
+                        ? Icons.folder_rounded
+                        : Icons.folder_copy_outlined),
                 onTap: () => _linkFolder(context, store),
               ),
               if (store.audiosLinked)

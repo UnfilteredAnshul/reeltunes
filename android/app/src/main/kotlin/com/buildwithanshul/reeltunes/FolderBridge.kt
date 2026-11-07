@@ -37,6 +37,7 @@ class FolderBridge(
             try {
                 when (call.method) {
                     "state" -> result.success(stateMap())
+                    "probe" -> runAsync(result) { probe() }
                     "link" -> launchLink(
                         result,
                         call.argument<Boolean>("preferDefault") == true
@@ -169,6 +170,35 @@ class FolderBridge(
         val stored = prefs.getString(KEY_ROOT, null)
         if (stored != null) return stored
         return DocumentsContract.getTreeDocumentId(uri)
+    }
+
+    /**
+     * True when the saved tree still resolves right now.
+     *
+     * Persisted grants survive reboots but NOT reinstalls, a system permission
+     * reset, or an OEM "clean up" pass. When the grant is gone the folder still
+     * looks linked (the URI is in our prefs) but every document read fails —
+     * which on the player side shows up as "Source error". Asking for a cheap
+     * read of the root separates "grant gone" from "file deleted".
+     */
+    private fun probe(): Boolean {
+        val uri = treeUri() ?: return false
+        val granted = context.contentResolver.persistedUriPermissions.any {
+            it.uri == uri && it.isReadPermission
+        }
+        if (!granted) return false
+        val rootId = rootDocId() ?: return false
+        return try {
+            context.contentResolver.query(
+                DocumentsContract.buildChildDocumentsUriUsingTree(uri, rootId),
+                arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID),
+                null,
+                null,
+                null,
+            )?.use { true } ?: false
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun stateMap(): Map<String, Any?> {
