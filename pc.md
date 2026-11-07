@@ -118,7 +118,7 @@ None — no account, no login. Playback/library access is anonymous. The plan (F
 ### lib/main.dart
 - `main()` (instant `runApp`, error reporting, deferred audio-service warm-up), `RootScreen` (splash, `LibrarySync`, `Billing.init()` after the library is up, first-run sheet, share intents, lifecycle re-scan + `Billing.refresh()`), `FirstRunSheet`, `CoinLoader`.
 ### lib/settings_screen.dart
-- Guide card, appearance radios, storage block (link folder / re-scan / uninstall copy), playback switches (**confirm before delete**, **confirm before removing**, keep playing during calls), feedback mailto, live Pro card (`ListenableBuilder` on `Entitlements`), "Redeem a code" row, "Code dashboard" row (debug builds, or once a master code unlocked the device), "Restore purchases" row, debug tier section.
+- Guide card, appearance radios, storage block (link folder / re-scan / uninstall copy), playback switches (**confirm before delete**, **confirm before removing**, keep playing during calls), feedback mailto, privacy policy + terms of service rows (`lib/legal.dart`), live Pro card (`ListenableBuilder` on `Entitlements`), "Redeem a code" row, "Code dashboard" row (debug builds, or once a master code unlocked the device), "Restore purchases" row, debug tier section.
 ### lib/promo.dart
 - `PromoEngine` (ChangeNotifier singleton): normalise (`uppercase`, strip `space - _`), local code registry (`promoCodes`), redemption log (`promoLog`, 500 rows), per-device once check on `promoDeviceId`, grant application through `Entitlements.setCodeGrant`. Built-ins `ANSHUL2012` (lifetime Pro + unlocks dashboard) and `FREEVERSION` (clears store/debug/grant **and** ends the trial) are inside `kDebugMode` branches, so release builds compile them out. `createCode/setRevoked/deleteCode/revokeAll/clearLog`. `redeem()` is the single UI entry point and the future `/redeem` swap point.
 ### lib/redeem_sheet.dart
@@ -133,9 +133,9 @@ None — no account, no login. Playback/library access is anonymous. The plan (F
 - **MainActivity : AudioServiceActivity** — engine bridge, folder bridge, SAF media picker channel (`/media`), recents-swipe notification cleanup by class name, back-press flag.
 - **FolderBridge.kt** — SAF tree link/unlink, scan (recursive, depth 4), save (copy from cache), text read/write, delete, open.
 - **EngineBridge.kt** — CPython launcher described above.
-- **Manifest** — INTERNET, FOREGROUND_SERVICE(+MEDIA_PLAYBACK), WAKE_LOCK, **`com.android.vending.BILLING`**; AudioService + MediaButtonReceiver (`android.intent.action.MEDIA_BUTTON`); SEND share target; `singleTask`; label ReelTunes; mailto query; **AdMob `com.google.android.gms.ads.APPLICATION_ID` meta-data = `ca-app-pub-5837741403938321~1070877733` (live)**.
+- **Manifest** — INTERNET, FOREGROUND_SERVICE(+MEDIA_PLAYBACK), WAKE_LOCK, POST_NOTIFICATIONS, **`com.android.vending.BILLING`**; AudioService + MediaButtonReceiver (`android.intent.action.MEDIA_BUTTON`); SEND share target; `singleTask`; label ReelTunes; mailto query; **AdMob `com.google.android.gms.ads.APPLICATION_ID` meta-data = `ca-app-pub-5837741403938321~1070877733` (live)**. `com.google.android.gms.permission.AD_ID` + the `ACCESS_ADSERVICES_*` permissions are merged in by play-services-ads; they are not in the source manifest.
 - **Headset / Bluetooth buttons** — no custom code and no second app: `AudioService` publishes a real Android MediaSession, so the wired/BT remote goes through `MediaButtonReceiver` → audio_service → `just_audio_background`. Single tap = play/pause, next/previous buttons = queue skip, and the Platform's headset-hook double-tap maps to next (the vendored fork's `getRelativeIndex` patch is what stops that from restarting the same track under `LoopMode.one`). Lock-screen and notification controls use the same path.
-- **build.gradle.kts** — `applicationId com.buildwithanshul.reeltunes`, `minSdk 24`, `useLegacyPackaging = true`, `doNotStrip "**/*.zip.so"`, release still signed with the debug key.
+- **build.gradle.kts** — `applicationId com.buildwithanshul.reeltunes`, `minSdk 24`, `useLegacyPackaging = true`, `doNotStrip "**/*.zip.so"`, release signed with `android/upload-keystore.jks` (alias `upload`); credentials in `android/key.properties`, both gitignored.
 - **packages/just_audio_background** — vendored fork of `0.0.1-beta.17` (latest upstream), wired via `dependency_overrides`. Two patches, both marked `ReelTunes patch`: (1) `getRelativeIndex` no longer returns the current index under `repeatMode == one`, so the media session's next/previous skip the queue instead of restarting the track; (2) `onTaskRemoved()` now calls `stop()`, so swiping the app from Recents clears the media notification. `example/` deleted so analysis stays clean. Re-check both when upgrading just_audio.
 
 ## Build & Deploy
@@ -148,10 +148,10 @@ $adb = "E:\Android\Sdk\platform-tools\adb.exe"
 & $adb -s "<serial>" install -r build\app\outputs\flutter-apk\app-debug.apk
 & $adb -s "<serial>" shell am start -n com.buildwithanshul.reeltunes/.MainActivity
 ```
-- **Last build:** 2026-11-04 — `flutter build apk --debug` (157 MB) + `adb install -r` succeeded on the wireless serial above. Installed, not device-tested by the agent (the user tests).
+- **Last build:** 2026-11-08 — `flutter build appbundle --release` with the two test defines → `ReelTunes-0.0.2-internal-5.aab` (versionCode 5). Debug APK is still the on-device build and is installed separately (different signature from the upload key).
 - **No build without explicit approval.** The user runs device tests; the agent reads logcat (`adb logcat -d | Select-String "extraction failed|Saved"`).
 - **Device access:** Wireless debugging is the default now. Pair once with `adb pair <ip>:<pair-port> <code>`, then `adb connect <ip>:<connect-port>`; the connect port changes every time Wireless debugging is toggled, and mDNS pairing exposes a serial like `adb-PBFIINYP7LGE4PPV-Sgk2he._adb-tls-connect._tcp`. USB shows the bare `PBFIINYP7LGE4PPV`.
-- Release plan `--release --split-per-abi` (~40 MB arm64) untested; `flutter build appbundle` never run.
+- Release plan `--release --split-per-abi` (~40 MB arm64) untested; `flutter build appbundle` works and is the shipping path.
 
 ## Bugs & Gotchas (hit & fixed — empirical)
 1. **Gradle `excludes` deletes the engine** — use `doNotStrip` + `useLegacyPackaging=true`.
@@ -205,12 +205,30 @@ $adb = "E:\Android\Sdk\platform-tools\adb.exe"
 42. **No media notification at all on Android 13+** — `POST_NOTIFICATIONS` was never declared or requested. Added to the manifest and requested in `MainActivity.onCreate`.
 
 ## Release build (internal testing)
-- Upload keystore: `android/upload-keystore.jks` (alias `upload`), credentials in `android/key.properties`. Both gitignored — **back them up**, losing the upload key means a Play support request.
-- `flutter build appbundle --release --dart-define=RC_ANDROID_KEY=goog_… --dart-define=ADMOB_TEST_ADS=true`
-- RevenueCat key: dashboard → Project settings → API keys → *Google Play* public app-specific key (`goog_…`). Without it `Billing.androidKey` is empty, the store is disabled and the paywall says Pro isn't live.
+- Upload keystore: `android/upload-keystore.jks` (alias `upload`), credentials in `android/key.properties`. Both gitignored — **back them up**, losing the upload key means a Play support request. Certificate SHA-256: `81:51:D7:9F:B1:00:2B:D4:3D:61:C8:4A:39:AB:0C:82:A7:9D:94:26:48:E0:4E:71:65:00:44:9A:52:E2:CB:05`.
+- Command used for the internal test bundle:
+
+```powershell
+flutter build appbundle --release --dart-define=ADMOB_TEST_ADS=true --dart-define=RC_ANDROID_KEY=test_tyQKigCCoWOlwvRESjGOAhdUwXI
+```
+
+- **Current artifact:** `ReelTunes-0.0.2-internal-5.aab` (versionCode 5, versionName 0.0.2, package `com.buildwithanshul.reeltunes`, ~110 MB). Older bundles are deleted so the root only ever holds the newest.
+- **versionCode rule:** it comes from `pubspec.yaml` (`version: 0.0.2+N`). Play burns every uploaded code even if the release is deleted, so bump `N` before every upload and put the code in the file name. Renaming an AAB without rebuilding does nothing.
+- RevenueCat key: dashboard → Project settings → API keys → *Google Play* public app-specific key (`goog_…`). Without it `Billing.androidKey` is empty, the store is disabled and the paywall says Pro isn't live. Only `test_…` is available until the Play app + service-account JSON exist, so the internal test cannot complete a real purchase yet.
 - For internal testing keep `ADMOB_TEST_ADS=true` (never tap live ads); drop that define for the production build.
 - Installing the Play build over the current debug build requires an uninstall (different signing key) → app data resets and the folder must be re-linked once. The mirror restores playlists.
 - Play updates (same package + signature) keep the SAF grant, so users don't re-link after a normal update.
+
+## Legal pages (privacy + terms)
+- Hosted from `privacy/` in this repo and deployed to Cloudflare with `npx wrangler deploy` (config in `wrangler.jsonc`, static assets only, no build step).
+- **Privacy:** https://reeltunes-privacy.buildwise.workers.dev/
+- **Terms:** https://reeltunes-privacy.buildwise.workers.dev/terms (`/terms.html` redirects)
+- URLs live in `lib/legal.dart` (`privacyPolicyUrl`, `termsOfServiceUrl`) and are opened from Settings → Privacy → Privacy policy / Terms of service.
+- Policy content covers: on-device storage, internet use for downloads from a pasted link, RevenueCat, AdMob, permissions, deletion requests, no account.
+- Terms cover: user responsibility for downloaded content, Google Play billing, coins/perks expiry, liability, India/Karnataka law.
+- Data safety answers used: Purchase history (collected, not shared, App functionality + Analytics); Approximate location, App interactions, Diagnostics, Device or other IDs (collected + shared, Advertising or marketing + Analytics, plus Fraud prevention on IDs). No email is collected any more.
+- Content rating: yes to online content, yes to ads, yes to digital purchases; expect Teen / PEGI 12.
+- Store assets: `assets/play-store-icon-512.png` (opaque navy, mark at 67%), `assets/feature-graphic-1024x500.png`. Launcher icons use an adaptive icon (`mipmap-anydpi-v26`) with the mark at 60% inside the 72dp safe zone.
 
 ## Design Decisions
 - **On-device bundled engine, no runtime code downloads** — CPython + yt-dlp ride in the APK; updates ship through Play.
@@ -235,7 +253,8 @@ $adb = "E:\Android\Sdk\platform-tools\adb.exe"
 - **Queue surgery is index-aligned** — one flat engine playlist, state-first removal, and a guard flag while the platform catches up. This is the fix for the "remove abc → shows pqr → hears abc" report.
 
 ## Production readiness (open)
-- Release signing (debug key today), upload keystore / Play App Signing, AAB. **Play fee:** $25 one-time developer registration (no yearly fee); Play's subscription commission is 15% on the first $1M/year. **New personal accounts (created after 13 Nov 2023) must run a closed test with ≥12 testers opted in for 14 continuous days before production access is unlocked**; organization accounts need a D-U-N-S number instead.
+- **Release signing done** — upload keystore + Play App Signing, AAB builds and uploads. **Play fee:** $25 one-time developer registration (no yearly fee); Play's subscription commission is 15% on the first $1M/year. **New personal accounts (created after 13 Nov 2023) must run a closed test with ≥12 testers opted in for 14 continuous days before production access is unlocked**; organization accounts need a D-U-N-S number instead.
+- **DSA trader status: yes** — ads + subscriptions make this a commercial app, so the Play listing shows the declared trader name, address, email and phone to EU users. Decide the public address before shipping to the EU.
 - **Subscriptions do not require a production app.** Create `reeltunes_pro_monthly` / `reeltunes_pro_annual` once a billing-enabled AAB is on an internal-testing track, wire RevenueCat, and test purchases with license testers; production can follow later. The live redeem dashboard can likewise ship in a later update.
 - **Play Console: create `reeltunes_pro_monthly` / `reeltunes_pro_annual` (7-day free trial offer), then RevenueCat dashboard: entitlement `pro`, offering `default`, packages `$rc_monthly` / `$rc_annual`, Play service-account JSON. Build with `--dart-define RC_ANDROID_KEY=goog_…`.** Until both exist, the paywall says "Pro isn't live yet".
 - Ads: **AdMob is live** (`google_mobile_ads` 9.2.0 + UMP): sticky banner, two in-list playlist cards, rewarded (coins), app-open. App id + units in `lib/ad_config.dart` and the manifest; debug defaults to live units with a **Settings → Debug tiers → Use test ad units** safety switch. Deferred until the ad test is approved: `app-ads.txt`, privacy policy + Data Safety naming AdMob/AAID, content rating 13+, "contains ads" declaration. Plan + slot rules in `docs/ads.md`, switch/verification steps in `docs/admob-setup.md`.
@@ -243,7 +262,8 @@ $adb = "E:\Android\Sdk\platform-tools\adb.exe"
 - Content-rights consent sheet + Settings toggle. **Link validation is done** (`lib/link_rules.dart`: `https` only, YouTube Shorts / Instagram Reels / Facebook / TikTok allowlist).
 - Generic branding in listing/screenshots (no platform names or logos); in-app licences screen (LICENSES/ already shipped in repo).
 - `allowBackup=false` + `dataExtractionRules` (or a deliberate backup story) — audit before release.
-- Privacy policy, Data Safety answers, store listing assets.
+- Privacy policy, Data Safety answers, content rating answers and store assets: **done** (see "Legal pages"). Still manual in the console because Play exposes no API for those forms.
+- Play Console automation: the Android Publisher API can upload bundles, manage tracks, listings and products, but **cannot** fill Data safety, content rating, target audience, ads or the AD_ID declaration. A service-account JSON is needed before any of that can be scripted.
 - Extraction IP/ToS exposure and Play's stance on bundled interpreters remain the headline risk.
 - 16 KB page-size support for the bundled `libpython*.so` / `libqjs.so` not verified — **the RevenueCat/Billing SDK now adds its own `.so`-free code, so this remains an engine-only question**.
 - Public GPL repo `UnfilteredAnshul/reeltunes-gpl-sources` still undeleted (delete after the GPL-free build is verified on device).
@@ -251,7 +271,7 @@ $adb = "E:\Android\Sdk\platform-tools\adb.exe"
 ## File Tree
 ```
 E:\Projects\ReelTune\
-├─ android/app/build.gradle.kts              # appId com.buildwithanshul.reeltunes, minSdk 24, doNotStrip zip.so, debug signing
+├─ android/app/build.gradle.kts              # appId com.buildwithanshul.reeltunes, minSdk 24, doNotStrip zip.so, release = upload keystore
 ├─ android/app/src/main/AndroidManifest.xml  # no storage permissions; AudioService + receiver; SEND target
 ├─ android/app/src/main/jniLibs/<abi>/       # libpython.so, libpython.zip.so, libqjs.so, libytdlp.so (arm64/armv7/x86_64)
 ├─ android/app/src/main/kotlin/com/buildwithanshul/reeltunes/
@@ -269,6 +289,9 @@ E:\Projects\ReelTune\
 │  ├─ billing.dart                            # RevenueCat: configure, offerings, purchase, restore
 │  ├─ promo.dart · redeem_sheet.dart · code_admin.dart   # codes: registry, redeem sheet, in-app dashboard
 │  ├─ extraction_errors.dart · top_toast.dart · settings_screen.dart · emoji.dart · error_report.dart
+├─ privacy/                                  # index.html + terms.html + logo.png, deployed to Cloudflare
+├─ wrangler.jsonc                            # static-assets config: name reeltunes-privacy, dir privacy
+├─ assets/play-store-icon-512.png · assets/feature-graphic-1024x500.png
 ├─ docs/free-vs-pro.md · docs/ads.md · docs/promo-codes.md · docs/admob-setup.md
 ├─ tools/repack_engine.py                    # reproducible GPL strip of libpython.zip.so
 ├─ LICENSES/                                 # PSF-2.0, Apache-2.0, LGPL-2.1, Unlicense, QuickJS-MIT
@@ -280,18 +303,16 @@ E:\Projects\ReelTune\
 ```
 
 ## Skills & MCPs
-- **Skills:** `apple-design`, `savefile` (this file + vault copy), `vault` (session/bug logs), `multi-author-commits` (commit rules), `opencode`; `agent-reach` unused so far.
-- **MCP:** none configured.
+- **Skills:** `apple-design`, `savefile` (this file + vault copy), `vault` (session/bug logs), `multi-author-commits` (commit rules), `opencode`, plus the Cloudflare skill set (22 skills: `wrangler`, `cloudflare`, `workers-*`, `agents-sdk`, `cf-cli`, …) installed to `~/.agents/skills`.
+- **MCP:** `cloudflare` (remote, `https://mcp.cloudflare.com/mcp`, OAuth) configured in `~/.config/opencode/opencode.jsonc`. Account `d77090059bcf2448a72aab38cb9a3617`. Read-only scopes in the MCP grant; deploys run through `npx wrangler deploy`.
 - **Commit rules (owner `UnfilteredAnshul`):** author = Anshul (`anshul091103@gmail.com`); committer = random pick among the 3 identities (Anshul / shreyanotfound404 / buildwithsimran); never push unless explicitly asked; tokens in Credential Manager only.
 
 ## Remaining work (bugs + features)
 
-1. **Widget survives Recents swipe + player buttons dead** — widget needs `onDisabled`/`onDeleted` + background service path.
-2. **Notification bar player** — ongoing foreground notification with prev/play/pause/next + playlist name.
-3. **Perk/Pro expiry notifications** — 3d, 1d, exact-minute alerts via NotificationService (currently stub).
-4. **Notification settings** — device sound + vibrate, synced app info ↔ in-app.
-5. **Real flutter_local_notifications** — find AGP 9-compatible version or write platform channel.
-6. **Hot reload on playlist changes** — `AppStore` listeners must propagate to `_TracksView` immediately.
-7. **Free restriction re-apply** — all gates must re-evaluate when Pro/perk lapses (playlist removal etc.).
-8. **Push to origin/main** — only when explicitly asked.
+1. **Perk / Pro expiry notifications** — 3 days, 1 day and exact-minute alerts. `lib/notification_service.dart` is still a stub that stores the sound/vibrate preference but fires nothing.
+2. **Notification settings** — sound picker + vibrate toggle persist, but no notification consumes them yet.
+3. **Real local notifications** — `flutter_local_notifications` was removed because it breaks the AGP 9 build. Do not re-add without a verified build; options are a platform channel or a fork that supports AGP 9.
+4. **Hot reload on playlist changes** — `AppStore` listeners must propagate to `_TracksView` immediately.
+5. **Free restriction re-apply** — all gates must re-evaluate when Pro/perk lapses (playlist removal etc.).
+6. **Push to origin/main** — only when explicitly asked. Local history was rewritten on 8 Nov (committer identity fix), so the first push after that needs `--force-with-lease`.
 

@@ -144,6 +144,13 @@ class SettingsScreen extends StatelessWidget {
                 trailing: const Icon(Icons.open_in_new, size: 18),
                 onTap: () => _openPrivacyPolicy(context),
               ),
+              ListTile(
+                leading: const Icon(Icons.gavel_outlined),
+                title: const Text('Terms of service'),
+                subtitle: const Text('The rules for using ReelTunes and Pro'),
+                trailing: const Icon(Icons.open_in_new, size: 18),
+                onTap: () => _openTerms(context),
+              ),
               const _Section('Notifications'),
               _NotificationSettingsTile(),
               const _Section('Support'),
@@ -322,10 +329,17 @@ class SettingsScreen extends StatelessWidget {
 
   /// Opens the hosted policy in the browser. Play requires the same page to be
   /// reachable from inside the app, not only from the listing.
-  Future<void> _openPrivacyPolicy(BuildContext context) async {
+  Future<void> _openPrivacyPolicy(BuildContext context) =>
+      _openLegal(context, privacyPolicyUrl);
+
+  /// Terms of service, same host as the policy.
+  Future<void> _openTerms(BuildContext context) =>
+      _openLegal(context, termsOfServiceUrl);
+
+  Future<void> _openLegal(BuildContext context, String url) async {
     var opened = false;
     try {
-      opened = await launchUrl(Uri.parse(privacyPolicyUrl),
+      opened = await launchUrl(Uri.parse(url),
           mode: LaunchMode.externalApplication);
     } catch (_) {
       opened = false;
