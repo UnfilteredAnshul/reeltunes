@@ -12,6 +12,7 @@ import 'error_report.dart';
 import 'library.dart';
 import 'library_sync.dart';
 import 'models.dart';
+import 'notification_service.dart';
 import 'player.dart';
 import 'promo.dart';
 import 'sheets.dart';
@@ -98,6 +99,8 @@ class _RootScreenState extends State<RootScreen>
       // AdMob + UMP consent warm up in the background: the free-tier banner
       // waits for `Ads.I.ready`, so the splash never blocks on the ad SDK.
       unawaited(Ads.I.init());
+      // Notification service: scheduled perk / Pro expiry alerts.
+      unawaited(NotificationService.I.init());
       _listenShareIntents();
       if (!mounted) return;
       if (!AppStore.I.audiosLinked) {

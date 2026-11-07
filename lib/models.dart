@@ -150,8 +150,8 @@ class AppStore extends ChangeNotifier {
   bool confirmDelete = true; // ask before deleting a track
   bool confirmRemove = true; // ask before removing a track from the library
   bool playDuringCalls = false; // keep audio playing when a call comes in
-  SortBy sortBy = SortBy.manual; // manual = user-drag order (tracks)
-  bool sortAsc = true; // ascending when sortBy != manual
+  SortBy sortBy = SortBy.dateAdded; // default: newest first
+  bool sortAsc = false; // descending = newest first when sortBy != manual
 
   String? selectedFolderId; // null = All audios
 
@@ -543,6 +543,37 @@ class AppStore extends ChangeNotifier {
     final max = Entitlements.I.maxTracks;
     if (Entitlements.I.isPro || tracks.length <= max) return 0;
     return tracks.length - max;
+  }
+
+  /// Folder IDs a Free plan is allowed to see: the newest
+  /// [Entitlements.maxPlaylists] folders. Returns null when there is no cap.
+  ///
+  /// Extra playlists are neither deleted nor removed from `folders` — they
+  /// stay on the phone and reappear when the user upgrades or buys slots.
+  Set<String>? _freeCapFolderIds() {
+    final max = Entitlements.I.maxPlaylists;
+    if (Entitlements.I.isPro || folders.length <= max) return null;
+    final indexes = List<int>.generate(folders.length, (i) => i);
+    indexes.sort((a, b) {
+      // Newest first by position in store order (folders append in order).
+      return b.compareTo(a);
+    });
+    return {for (final i in indexes.take(max)) folders[i].id};
+  }
+
+  /// How many playlists exist but are hidden by the Free cap (0 when Pro/under).
+  int get hiddenByFreeCapPlaylists {
+    final max = Entitlements.I.maxPlaylists;
+    if (Entitlements.I.isPro || folders.length <= max) return 0;
+    return folders.length - max;
+  }
+
+  /// Folders a Free plan is allowed to see: newest [maxPlaylists] only.
+  /// Extra folders stay in `folders` but are hidden from the UI.
+  List<Folder> get visibleFolders {
+    final capIds = _freeCapFolderIds();
+    if (capIds == null) return List<Folder>.of(folders);
+    return folders.where((f) => capIds.contains(f.id)).toList();
   }
 
   /// Tracks matching the current folder + name search + date filter, in

@@ -234,7 +234,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                           child: const Icon(Icons.expand_more),
                         ),
                       ),
-                      Text('Playlists (${store.folders.length})',
+                      Text('Playlists (${store.visibleFolders.length})',
                           style: Theme.of(context)
                               .textTheme
                               .titleSmall
@@ -609,9 +609,10 @@ class _FolderStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final store = AppStore.I;
+    final folders = store.visibleFolders;
     final chips = <(String?, String, String)>[
       (null, 'All', '🎧'),
-      ...store.folders.map((f) => (f.id, f.name, f.emoji)),
+      ...folders.map((f) => (f.id, f.name, f.emoji)),
       (null, 'New playlist', '➕'),
     ];
     return SizedBox(
@@ -678,8 +679,9 @@ class _FoldersList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final store = AppStore.I;
+    final folders = store.visibleFolders;
     return SliverReorderableList(
-      itemCount: store.folders.length,
+      itemCount: folders.length,
       onReorder: (o, n) => store.reorderFolders(o, n),
       proxyDecorator: (child, index, animation) => ScaleTransition(
         scale: animation.drive(Tween(begin: 1.0, end: 1.05)
@@ -688,7 +690,7 @@ class _FoldersList extends StatelessWidget {
             elevation: 2, borderRadius: BorderRadius.circular(12), child: child),
       ),
       itemBuilder: (c, i) {
-        final f = store.folders[i];
+        final f = folders[i];
         return KeyedSubtree(
           key: ValueKey(f.id),
           child: ListTile(
@@ -726,6 +728,7 @@ class _FoldersGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final store = AppStore.I;
+    final folders = store.visibleFolders;
     return SliverPadding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       sliver: SliverToBoxAdapter(
@@ -745,9 +748,9 @@ class _FoldersGrid extends StatelessWidget {
                 ? Duration.zero
                 : const Duration(milliseconds: 260),
             onReorder: (o, n) => store.reorderFolders(o, n),
-            itemCount: store.folders.length,
+            itemCount: folders.length,
             itemBuilder: (c, i) {
-              final f = store.folders[i];
+              final f = folders[i];
               return KeyedSubtree(
                 key: ValueKey(f.id),
                 child: _folderCard(c, store, f,
@@ -868,10 +871,26 @@ Future<void> showSortFilterSheet(BuildContext context) {
                 ),
               ),
               const SizedBox(height: 10),
-              TextButton(
-                onPressed: () => Navigator.pop(sheetCtx),
-                child: const Text('Done'),
-              ),
+              Row(children: [
+                Expanded(
+                  child: TextButton(
+                    onPressed: () {
+                      store.setSortBy(SortBy.dateAdded);
+                      store.setSortAsc(false);
+                      store.setDateFilter(DateFilter.any);
+                      store.setSearchQuery('');
+                      Navigator.pop(sheetCtx);
+                    },
+                    child: const Text('Reset filters'),
+                  ),
+                ),
+                Expanded(
+                  child: TextButton(
+                    onPressed: () => Navigator.pop(sheetCtx),
+                    child: const Text('Done'),
+                  ),
+                ),
+              ]),
             ],
           ),
         ),
@@ -905,11 +924,13 @@ class _SortHalf extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const _HalfTitle('SORT'),
-        _ChoiceRow(
-            label: 'Manual',
-            hint: 'your own order',
-            selected: store.sortBy == SortBy.manual,
-            onTap: () => store.setSortBy(SortBy.manual)),
+        // Manual sort only inside playlists — "All audios" is always date/name.
+        if (store.selectedFolderId != null)
+          _ChoiceRow(
+              label: 'Manual',
+              hint: 'your own order',
+              selected: store.sortBy == SortBy.manual,
+              onTap: () => store.setSortBy(SortBy.manual)),
         _ChoiceRow(
             label: 'Name',
             selected: store.sortBy == SortBy.name,

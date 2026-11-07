@@ -20,6 +20,7 @@ import 'shop_sheet.dart';
 import 'sheets.dart';
 import 'top_toast.dart';
 import 'receipt_email.dart';
+import 'notification_service.dart';
 
 /// Where bug reports and suggestions go (mail app handoff, no server).
 const feedbackEmail = 'contact.unfiltered.anshul@gmail.com';
@@ -129,6 +130,8 @@ class SettingsScreen extends StatelessWidget {
               ),
               const _Section('Privacy'),
               const _AdPrivacyTile(),
+              const _Section('Notifications'),
+              _NotificationSettingsTile(),
               const _Section('Support'),
               ListTile(
                 leading: const Icon(Icons.bug_report_outlined),
@@ -374,6 +377,64 @@ class _Section extends StatelessWidget {
                 ?.copyWith(
                     color: Theme.of(context).colorScheme.onSurfaceVariant)),
       );
+}
+
+class _NotificationSettingsTile extends StatefulWidget {
+  const _NotificationSettingsTile();
+  @override
+  State<_NotificationSettingsTile> createState() => _NotificationSettingsTileState();
+}
+
+class _NotificationSettingsTileState extends State<_NotificationSettingsTile> {
+  @override
+  Widget build(BuildContext context) {
+    final n = NotificationService.I;
+    return Column(children: [
+      SwitchListTile(
+        title: const Text('Vibrate on alerts'),
+        subtitle: const Text('Perk and Pro expiry notifications vibrate.'),
+        value: n.vibrate,
+        onChanged: (v) => n.setVibrate(v),
+      ),
+      ListTile(
+        leading: const Icon(Icons.volume_up),
+        title: const Text('Notification sound'),
+        subtitle: Text(n.soundUri != null ? 'Custom sound set' : 'Default sound'),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () async {
+          // Open the system ringtone picker
+          try {
+            final picked = await showDialog<String>(
+              context: context,
+              builder: (ctx) => SimpleDialog(
+                title: const Text('Choose notification sound'),
+                children: [
+                  SimpleDialogOption(
+                    onPressed: () => Navigator.pop(ctx, 'default'),
+                    child: const Text('Default'),
+                  ),
+                  SimpleDialogOption(
+                    onPressed: () => Navigator.pop(ctx, 'system_1'),
+                    child: const Text('System 1'),
+                  ),
+                  SimpleDialogOption(
+                    onPressed: () => Navigator.pop(ctx, 'system_2'),
+                    child: const Text('System 2'),
+                  ),
+                ],
+              ),
+            );
+            if (picked != null && mounted) {
+              await n.setSoundUri(picked == 'default' ? null : picked);
+              setState(() {});
+            }
+          } catch (_) {
+            // Ringtone picker may not be available on all devices — silently skip.
+          }
+        },
+      ),
+    ]);
+  }
 }
 
 class _ThemeRadio extends StatelessWidget {

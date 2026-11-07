@@ -11,10 +11,13 @@
 //   • A lapsed Pro never hides or deletes anything already in the library —
 //     the cap only applies to what is imported next.
 
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'coins.dart';
+import 'notification_service.dart';
 
 class Entitlements extends ChangeNotifier {
   Entitlements._();
@@ -86,6 +89,15 @@ class Entitlements extends ChangeNotifier {
 
   void _changed() => notifyListeners();
 
+  /// Called when any entitlement-relevant state changes (plan flip, perk
+  /// expiry, etc.). Refreshes expiry notifications so they track the current
+  /// state exactly.
+  void _changedWithNotifs() {
+    notifyListeners();
+    unawaited(NotificationService.I.refreshPerkNotifications());
+    unawaited(NotificationService.I.refreshProNotifications());
+  }
+
   // ---- trial -------------------------------------------------------------
 
   DateTime? get trialStartedAt => _trialStartedAt;
@@ -100,7 +112,7 @@ class Entitlements extends ChangeNotifier {
     _trialStartedAt = DateTime.now();
     await _prefs?.setInt(
         'trialStartMs', _trialStartedAt!.millisecondsSinceEpoch);
-    _changed();
+    _changedWithNotifs();
   }
 
   /// A mirror found in the user's audios folder carries the original trial
@@ -111,7 +123,7 @@ class Entitlements extends ChangeNotifier {
     if (existing != null && existing <= ms) return;
     _trialStartedAt = DateTime.fromMillisecondsSinceEpoch(ms);
     await _prefs?.setInt('trialStartMs', ms);
-    _changed();
+    _changedWithNotifs();
   }
 
   /// No folder linked yet = nothing to limit, so the app behaves as Pro.
@@ -244,7 +256,7 @@ class Entitlements extends ChangeNotifier {
   Future<void> markReminderShown(int days) async {
     await _prefs?.setBool(
         days <= 1 ? 'reminderShown1' : 'reminderShown3', true);
-    _changed();
+    _changedWithNotifs();
   }
 
   // ---- billing hooks / debug --------------------------------------------
@@ -288,7 +300,7 @@ class Entitlements extends ChangeNotifier {
       await p?.remove('reminderShown3');
       await p?.remove('reminderShown1');
     }
-    _changed();
+    _changedWithNotifs();
   }
 
   /// Writes/extends a code grant. [until] is ignored for a lifetime grant.
@@ -315,7 +327,7 @@ class Entitlements extends ChangeNotifier {
       await p.remove('reminderShown3');
       await p.remove('reminderShown1');
     }
-    _changed();
+    _changedWithNotifs();
   }
 
   Future<void> clearCodeGrant() async {
@@ -328,7 +340,7 @@ class Entitlements extends ChangeNotifier {
       await p.remove('grantLifetime');
       await p.remove('grantCode');
     }
-    _changed();
+    _changedWithNotifs();
   }
 
   /// The mirror copy written into `.reeltunes-library.json`, so a reinstall
@@ -374,7 +386,7 @@ class Entitlements extends ChangeNotifier {
     if (v) _debugFree = false;
     await _prefs?.setBool('debugPro', v);
     await _prefs?.setBool('debugFree', _debugFree);
-    _changed();
+    _changedWithNotifs();
   }
 
   /// Debug only: force Free even over a purchase, code grant or live trial.
@@ -384,7 +396,7 @@ class Entitlements extends ChangeNotifier {
     if (v) _debugPro = false;
     await _prefs?.setBool('debugFree', v);
     await _prefs?.setBool('debugPro', _debugPro);
-    _changed();
+    _changedWithNotifs();
   }
 
   /// Debug only: jump the trial straight to its last day.
@@ -395,7 +407,7 @@ class Entitlements extends ChangeNotifier {
         'trialStartMs', _trialStartedAt!.millisecondsSinceEpoch);
     await _prefs?.remove('reminderShown3');
     await _prefs?.remove('reminderShown1');
-    _changed();
+    _changedWithNotifs();
   }
 
   /// Debug only: pretend the trial ended an hour ago.
@@ -404,7 +416,7 @@ class Entitlements extends ChangeNotifier {
     _trialStartedAt = DateTime.now().subtract(const Duration(days: 8));
     await _prefs?.setInt(
         'trialStartMs', _trialStartedAt!.millisecondsSinceEpoch);
-    _changed();
+    _changedWithNotifs();
   }
 
   /// Debug only: clear the trial so it can start over.
@@ -414,7 +426,7 @@ class Entitlements extends ChangeNotifier {
     await _prefs?.remove('trialStartMs');
     await _prefs?.remove('reminderShown3');
     await _prefs?.remove('reminderShown1');
-    _changed();
+    _changedWithNotifs();
   }
 
   /// Shown in Settings and on the paywall.

@@ -16,11 +16,14 @@
 // Everything else in the app keeps working, so a sideloaded copy never crashes
 // on a missing key.
 
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:purchases_flutter/purchases_flutter.dart';
 
 import 'entitlements.dart';
+import 'notification_service.dart';
 
 enum PurchaseOutcome { success, cancelled, pending, unavailable, failed }
 
@@ -296,6 +299,8 @@ class Billing {
       endsAt: _parseDate(ent?.expirationDate),
       productId: ent?.productIdentifier,
     );
+    // Refresh Pro expiry notifications when the entitlement changes.
+    unawaited(NotificationService.I.refreshProNotifications());
   }
 
   static DateTime? _parseDate(String? iso) =>
