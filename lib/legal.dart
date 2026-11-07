@@ -5,4 +5,4 @@
 // Vercel, static, HTTPS). Update this constant if the project name changes.
 
 const String privacyPolicyUrl =
-    'https://reeltunes-privacy.anshul091103.workers.dev/';
+    'https://reeltunes-privacy.buildwise.workers.dev/';
