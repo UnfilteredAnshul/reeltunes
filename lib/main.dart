@@ -17,14 +17,13 @@ import 'player.dart';
 import 'promo.dart';
 import 'sheets.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   installErrorReporting(); // failures land in logcat AND as on-screen toasts
-  // App opens INSTANTLY — nothing blocking before runApp().
+  // Media-session service must be ready before the app builds — the player
+  // needs the audio handler initialized before any playback.
+  await RtPlayer.I.ensureBackgroundService();
   runApp(const ReelTuneApp());
-  // Media-session service warms up in the background; RtPlayer guarantees it
-  // has completed before the first play() (see RtPlayer.ensureBackgroundService).
-  RtPlayer.I.ensureBackgroundService();
 }
 
 class ReelTuneApp extends StatefulWidget {
