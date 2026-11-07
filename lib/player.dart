@@ -80,7 +80,10 @@ class RtPlayer extends ChangeNotifier {
         androidNotificationChannelName: 'ReelTunes playback',
         androidNotificationOngoing: true,
         androidStopForegroundOnPause: false,
-      );
+      )..catchError((e, s) {
+          debugPrint('JustAudioBackground.init failed: $e');
+          reportError('audio service init failed', e, s);
+        });
 
   Future<void> _boot() async {
     try {
