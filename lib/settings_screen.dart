@@ -12,6 +12,7 @@ import 'billing.dart';
 import 'code_admin.dart';
 import 'coins.dart';
 import 'entitlements.dart';
+import 'legal.dart';
 import 'library_sync.dart';
 import 'models.dart';
 import 'promo.dart';
@@ -135,6 +136,14 @@ class SettingsScreen extends StatelessWidget {
               ),
               const _Section('Privacy'),
               const _AdPrivacyTile(),
+              ListTile(
+                leading: const Icon(Icons.description_outlined),
+                title: const Text('Privacy policy'),
+                subtitle: const Text(
+                    'What ReelTunes collects and what stays on your phone'),
+                trailing: const Icon(Icons.open_in_new, size: 18),
+                onTap: () => _openPrivacyPolicy(context),
+              ),
               const _Section('Notifications'),
               _NotificationSettingsTile(),
               const _Section('Support'),
@@ -309,6 +318,21 @@ class SettingsScreen extends StatelessWidget {
     store.completeFirstRun(picked.name ?? defaultSaveFolderName);
     showTopToast(context,
         'Folder linked — ${picked.name ?? defaultSaveFolderName}');
+  }
+
+  /// Opens the hosted policy in the browser. Play requires the same page to be
+  /// reachable from inside the app, not only from the listing.
+  Future<void> _openPrivacyPolicy(BuildContext context) async {
+    var opened = false;
+    try {
+      opened = await launchUrl(Uri.parse(privacyPolicyUrl),
+          mode: LaunchMode.externalApplication);
+    } catch (_) {
+      opened = false;
+    }
+    if (!opened && context.mounted) {
+      showTopToast(context, 'Could not open the browser', error: true);
+    }
   }
 
   /// Bug reports / suggestions open the device's mail app pre-addressed to
