@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Adaptive icon background: deep navy, matches the feature graphic.
+         The logo sits on top with its own margin inside the safe zone. -->
+    <color name="ic_launcher_background">#0B1E33</color>
+</resources>
