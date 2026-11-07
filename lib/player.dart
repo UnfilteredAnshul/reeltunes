@@ -51,6 +51,9 @@ class RtPlayer extends ChangeNotifier {
   int _passes = 0;
   /// True once the loop decision for the pass in flight has been made, so the
   /// 200 ms position ticks can't count the same ending twice.
+  bool _finalPassArmed = false;
+  /// The loop target is latched the first time a real duration is known, so
+  /// Smart's short-clip boost sees the actual length (not 0 during load).
   bool _targetLatched = false;
   Duration _lastPos = Duration.zero;
   /// Index changes inside this window are user/deck-driven, not "a track
@@ -404,17 +407,12 @@ class RtPlayer extends ChangeNotifier {
     final last = _lastPos;
     _lastPos = pos;
 
-    // Detect a wrap: position jumped backward = LoopMode.one repeated the
-    // track. This marks the START of a new pass. Count passes and switch to
-    // LoopMode.off at the start of the final pass so the engine has plenty of
-    // time to prepare the next track — no stutter at the boundary.
-    if (pos < last - const Duration(milliseconds: 500)) {
-      _passes++;
-      if (loop != RtLoop.off && loop != RtLoop.infinite &&
-          _passes >= _targetLoops) {
-        final ap = _ap;
-        if (ap != null) unawaited(ap.setLoopMode(LoopMode.off));
-      }
+    // A backward jump after arming means LoopMode.one wrapped the track to
+    // zero: this is the start of the next pass, so re-arm the boundary
+    // decision. (Seeking backwards by hand lands here too — harmless.)
+    if (_finalPassArmed &&
+        pos < last - const Duration(milliseconds: 300)) {
+      _finalPassArmed = false;
       return;
     }
 
@@ -432,6 +430,24 @@ class RtPlayer extends ChangeNotifier {
     }
 
     if (loop == RtLoop.infinite) return; // never advances by itself
+    if (_finalPassArmed) return;
+
+    // Decide before the end. Changing loop mode is a platform call, so it
+    // needs a real head start; a wide margin costs nothing because the only
+    // action is "do not repeat at the boundary" — the pass still plays in
+    // full. (Non-final passes are left in LoopMode.one and just count.)
+    final margin = d < const Duration(seconds: 2)
+        ? Duration(milliseconds: (d.inMilliseconds * 0.35).round())
+        : const Duration(milliseconds: 900);
+    if (pos < d - margin) return;
+
+    _finalPassArmed = true;
+    _passes++;
+    if (_passes >= _targetLoops) {
+      // Final pass: let ExoPlayer leave this item naturally on time.
+      final ap = _ap;
+      if (ap != null) unawaited(ap.setLoopMode(LoopMode.off));
+    }
   }
 
   void _onIndexChange(int? i) {
