@@ -305,7 +305,7 @@ E:\Projects\ReelTune\
 ## Skills & MCPs
 - **Skills:** `apple-design`, `savefile` (this file + vault copy), `vault` (session/bug logs), `multi-author-commits` (commit rules), `opencode`, plus the Cloudflare skill set (22 skills: `wrangler`, `cloudflare`, `workers-*`, `agents-sdk`, `cf-cli`, …) installed to `~/.agents/skills`.
 - **MCP:** `cloudflare` (remote, `https://mcp.cloudflare.com/mcp`, OAuth) configured in `~/.config/opencode/opencode.jsonc`. Account `d77090059bcf2448a72aab38cb9a3617`. Read-only scopes in the MCP grant; deploys run through `npx wrangler deploy`.
-- **Commit rules (owner `UnfilteredAnshul`):** author = Anshul (`anshul091103@gmail.com`); committer = **Simran Rajpal (`contact.simran.rajpal@gmail.com`)** for this repo, pinned 8 Nov 2026 so every commit matches the reference commit `4b85249` (all 45 commits unified). Never push unless explicitly asked; tokens in Credential Manager only.
+- **Commit rules (owner `UnfilteredAnshul`):** author = Anshul (`anshul091103@gmail.com`) always. Committer: **Simran Rajpal** for work from 7 Nov 23:00 onward (matches the reference commit `4b85249`), **Shreya Rajpal** for everything before that (35 commits, rewritten 8 Nov). Never push unless explicitly asked; tokens in Credential Manager only.
 - **Identity trap:** the git identity is `Simran Rajpal <contact.simran.rajpal@gmail.com>`. `Simran Kaur` and `buildwithsimran@gmail.com` are wrong (`buildwithsimran` is only a GitHub username).
 
 ## Remaining work (bugs + features)
