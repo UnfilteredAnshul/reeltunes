@@ -1318,8 +1318,9 @@ class _PaywallSheetState extends State<_PaywallSheet> {
     if (busy) return;
     final e = Entitlements.I;
 
-    // Already Pro: nothing to buy, just close.
-    if (e.isPro) {
+    // Already Pro: nothing to buy, just close. `paidPro` so a fresh install or
+    // a live trial still reaches the purchase call below.
+    if (e.paidPro) {
       Navigator.pop(context);
       return;
     }
@@ -1399,7 +1400,7 @@ class _PaywallSheetState extends State<_PaywallSheet> {
     final scheme = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
     final e = Entitlements.I;
-    final alreadyPro = e.isPro;
+    final alreadyPro = e.paidPro;
 
     return SingleChildScrollView(
       child: Padding(

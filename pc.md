@@ -207,6 +207,7 @@ $adb = "E:\Android\Sdk\platform-tools\adb.exe"
 43. **Release build died before the splash; "ReelTunes keeps stopping"** — Play build versionCode 5 crashed at process start. Logcat: `Unable to get provider androidx.startup.InitializationProvider` ← `Failed to create an instance of androidx.work.impl.WorkDatabase` ← `androidx.room.Room.getGeneratedImplementation(Room.java:100)` ← `WorkManagerInitializer`. R8 full mode (AGP 9) stripped the no-arg constructor of Room's generated `WorkDatabase_Impl` even though Room's consumer rule (`-keep class * extends androidx.room.RoomDatabase`) is in the build; WorkManager (pulled in by play-services-ads) instantiates that class by reflection, so the exception fired inside the `InitializationProvider` before the Flutter engine loaded. Fixed with `android/app/proguard-rules.pro` (`-keep class * extends androidx.room.RoomDatabase { *; }` plus `<init>()`) wired into the release `proguardFiles`. Verified in the v6 dex: `WorkDatabase_Impl` has its `<init>()` back, and the release APK boots on the device.
 44. **RevenueCat closed the release build with "Wrong API Key"** — a release bundle built with `RC_ANDROID_KEY=test_…` makes purchases_flutter show a blocking dialog ("This app is using a test API key … The app will close now") right after the first frame. Internal/release builds must omit the define so `Billing` stays disabled until a real `goog_…` key exists.
 45. **AdMob UMP consent is unconfigured** — release log: `UMP info update failed: Publisher misconfiguration … no form(s) configured for the input app ID`. Ads still load with test units, but the consent flow is missing until a GDPR/US-states message is created in AdMob → Privacy & messaging.
+46. **Paywall said "Manage subscription" on a brand-new install** — `isPro` is deliberately true before a folder is linked ("nothing to limit"), so the sheet's `alreadyPro` branch hid the plans and offered a Manage button to someone who had never bought anything (and `_buy()` returned early). Added `Entitlements.paidPro` (store purchase, debug override or code only) and used it for both the sheet's `alreadyPro` and the early-return in `_buy()`. A fresh install or a live trial now sees both prices; an actual subscriber still gets Manage subscription.
 
 ## Release build (internal testing)
 - Upload keystore: `android/upload-keystore.jks` (alias `upload`), credentials in `android/key.properties`. Both gitignored — **back them up**, losing the upload key means a Play support request. Certificate SHA-256: `81:51:D7:9F:B1:00:2B:D4:3D:61:C8:4A:39:AB:0C:82:A7:9D:94:26:48:E0:4E:71:65:00:44:9A:52:E2:CB:05`.
@@ -223,6 +224,19 @@ flutter build appbundle --release --dart-define=ADMOB_TEST_ADS=true
 - For internal testing keep `ADMOB_TEST_ADS=true` (never tap live ads); drop that define for the production build.
 - Installing the Play build over the current debug build requires an uninstall (different signing key) → app data resets and the folder must be re-linked once. The mirror restores playlists.
 - Play updates (same package + signature) keep the SAF grant, so users don't re-link after a normal update.
+
+## Testing the store without a `goog_` key
+- RevenueCat `test_…` keys only work in a **debuggable** build. In a release build the SDK shows its "Wrong API Key" dialog and closes the app (bug 44), so never bake the test key into a release/AAB.
+- Working debug build (arm64 only, test ads, test store):
+  ```powershell
+  flutter build apk --debug --target-platform android-arm64 --dart-define=ADMOB_TEST_ADS=true --dart-define=RC_ANDROID_KEY=test_tyQKigCCoWOlwvRESjGOAhdUwXI
+  adb uninstall com.buildwithanshul.reeltunes   # required when switching from the upload-key release APK
+  adb install -r build\app\outputs\flutter-apk\app-debug.apk
+  ```
+- Verified on the Realme (2026-11-08): logcat `billing: ready (entitlement "reeltunes_pro")`, offerings `default` with `monthly` ($9.99) and `yearly` ($79.99, "33% off 12 months"), Continue → **Test Store Purchase** dialog → "Test valid purchase" → `CustomerInfo updated`, Settings shows `Pro · no ads, unlimited audios`, and it survives a cold start. The sheet then shows `Pro · Renews automatically through Google Play`.
+- The test store lives in the RevenueCat dashboard (Products `monthly`/`yearly`, one current offering `default`). It needs no Play app, service account or real key; sandbox purchases never touch Google Play.
+- Because a folder is required before the trial starts, use Debug → "Trial: end it now" to reach the Free state for repeated purchase tests. Force Pro / Force Free toggles override the store and are useful for gating tests.
+- Test-store subscriptions are tied to the RevenueCat anonymous ID, so reinstalling the app resets them locally; buy again to re-test.
 
 ## Legal pages (privacy + terms)
 - Hosted from `privacy/` in this repo and deployed to Cloudflare with `npx wrangler deploy` (config in `wrangler.jsonc`, static assets only, no build step).
@@ -322,6 +336,6 @@ E:\Projects\ReelTune\
 4. **Hot reload on playlist changes** — `AppStore` listeners must propagate to `_TracksView` immediately.
 5. **Free restriction re-apply** — all gates must re-evaluate when Pro/perk lapses (playlist removal etc.).
 6. **Push to origin/main** — only when explicitly asked. Local history was rewritten on 8 Nov (committer identity fix), so the first push after that needs `--force-with-lease`.
-7. **Real RevenueCat key** — `Billing` is disabled in the shipped internal test because only a `test_…` key exists, and that key closes release builds (bug 44). Needs the Play app + service-account JSON, then a `goog_…` key passed as `RC_ANDROID_KEY` on production builds only.
+7. **Real RevenueCat key** — `Billing` is disabled in the shipped internal test because only a `test_…` key exists, and that key closes release builds (bug 44). Needs the Play app + service-account JSON, then a `goog_…` key passed as `RC_ANDROID_KEY` on production builds only. The full purchase flow is already proven on a debug build with the test key (see "Testing the store without a `goog_` key").
 8. **AdMob UMP consent form** — create a GDPR / US-states message in AdMob → Privacy & messaging; until then the SDK logs a publisher-misconfiguration error on launch (bug 45).
 

@@ -162,6 +162,11 @@ class Entitlements extends ChangeNotifier {
 
   bool get debugPro => _debugPro;
 
+  /// Pro that came from somewhere real: the store, a debug override, or a
+  /// code. Deliberately excludes the "no folder linked yet" state that makes
+  /// [isPro] true on a fresh install, so the paywall still shows prices there.
+  bool get paidPro => purchased || _debugPro || codeGrantActive;
+
   /// Debug only: Free is forced, regardless of purchase / code / trial.
   bool get debugFree => _debugFree;
 
