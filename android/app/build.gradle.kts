@@ -72,6 +72,13 @@ android {
                 signingConfigs.getByName("release")
             else
                 signingConfigs.getByName("debug")
+            // Appended after Flutter's own rules. Without this file R8 strips
+            // Room's generated WorkDatabase constructor and WorkManager kills
+            // the process before Flutter boots (see proguard-rules.pro).
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
 }

@@ -135,7 +135,8 @@ None — no account, no login. Playback/library access is anonymous. The plan (F
 - **EngineBridge.kt** — CPython launcher described above.
 - **Manifest** — INTERNET, FOREGROUND_SERVICE(+MEDIA_PLAYBACK), WAKE_LOCK, POST_NOTIFICATIONS, **`com.android.vending.BILLING`**; AudioService + MediaButtonReceiver (`android.intent.action.MEDIA_BUTTON`); SEND share target; `singleTask`; label ReelTunes; mailto query; **AdMob `com.google.android.gms.ads.APPLICATION_ID` meta-data = `ca-app-pub-5837741403938321~1070877733` (live)**. `com.google.android.gms.permission.AD_ID` + the `ACCESS_ADSERVICES_*` permissions are merged in by play-services-ads; they are not in the source manifest.
 - **Headset / Bluetooth buttons** — no custom code and no second app: `AudioService` publishes a real Android MediaSession, so the wired/BT remote goes through `MediaButtonReceiver` → audio_service → `just_audio_background`. Single tap = play/pause, next/previous buttons = queue skip, and the Platform's headset-hook double-tap maps to next (the vendored fork's `getRelativeIndex` patch is what stops that from restarting the same track under `LoopMode.one`). Lock-screen and notification controls use the same path.
-- **build.gradle.kts** — `applicationId com.buildwithanshul.reeltunes`, `minSdk 24`, `useLegacyPackaging = true`, `doNotStrip "**/*.zip.so"`, release signed with `android/upload-keystore.jks` (alias `upload`); credentials in `android/key.properties`, both gitignored.
+- **build.gradle.kts** — `applicationId com.buildwithanshul.reeltunes`, `minSdk 24`, `useLegacyPackaging = true`, `doNotStrip "**/*.zip.so"`, release signed with `android/upload-keystore.jks` (alias `upload`); credentials in `android/key.properties`, both gitignored. Release also adds `proguard-rules.pro` (Room keeps) next to `proguard-android-optimize.txt`.
+- **proguard-rules.pro** — keeps Room's generated database classes intact. R8 full mode otherwise drops `WorkDatabase_Impl.<init>()`, which kills the process at startup (see bug 43).
 - **packages/just_audio_background** — vendored fork of `0.0.1-beta.17` (latest upstream), wired via `dependency_overrides`. Two patches, both marked `ReelTunes patch`: (1) `getRelativeIndex` no longer returns the current index under `repeatMode == one`, so the media session's next/previous skip the queue instead of restarting the track; (2) `onTaskRemoved()` now calls `stop()`, so swiping the app from Recents clears the media notification. `example/` deleted so analysis stays clean. Re-check both when upgrading just_audio.
 
 ## Build & Deploy
@@ -148,7 +149,7 @@ $adb = "E:\Android\Sdk\platform-tools\adb.exe"
 & $adb -s "<serial>" install -r build\app\outputs\flutter-apk\app-debug.apk
 & $adb -s "<serial>" shell am start -n com.buildwithanshul.reeltunes/.MainActivity
 ```
-- **Last build:** 2026-11-08 — `flutter build appbundle --release` with the two test defines → `ReelTunes-0.0.2-internal-5.aab` (versionCode 5). Debug APK is still the on-device build and is installed separately (different signature from the upload key).
+- **Last build:** 2026-11-08 - `flutter build appbundle --release --dart-define=ADMOB_TEST_ADS=true` → `ReelTunes-0.0.2-internal-6.aab` (versionCode 6). A release APK of the same code was installed on the Realme and verified: splash, first-run folder sheet, home screen, no crash. Local APK is signed with the upload key, so it cannot be installed over a Play-signed build without an uninstall.
 - **No build without explicit approval.** The user runs device tests; the agent reads logcat (`adb logcat -d | Select-String "extraction failed|Saved"`).
 - **Device access:** Wireless debugging is the default now. Pair once with `adb pair <ip>:<pair-port> <code>`, then `adb connect <ip>:<connect-port>`; the connect port changes every time Wireless debugging is toggled, and mDNS pairing exposes a serial like `adb-PBFIINYP7LGE4PPV-Sgk2he._adb-tls-connect._tcp`. USB shows the bare `PBFIINYP7LGE4PPV`.
 - Release plan `--release --split-per-abi` (~40 MB arm64) untested; `flutter build appbundle` works and is the shipping path.
@@ -203,16 +204,20 @@ $adb = "E:\Android\Sdk\platform-tools\adb.exe"
 40. **Playlist counts / new playlists didn't refresh** — `const _FoldersGrid()` / `const _FoldersList()` are identical across rebuilds, so Flutter skipped them; only collapsing and expanding the section forced a rebuild. Removed `const` at both call sites.
 41. **Notification player was killed by swiping the app from Recents** — the vendored `just_audio_background` patch called `stop()` in `onTaskRemoved()`. Changed to stop only when paused, so playback and the media notification/ lock-screen player survive the swipe (Spotify-style).
 42. **No media notification at all on Android 13+** — `POST_NOTIFICATIONS` was never declared or requested. Added to the manifest and requested in `MainActivity.onCreate`.
+43. **Release build died before the splash; "ReelTunes keeps stopping"** — Play build versionCode 5 crashed at process start. Logcat: `Unable to get provider androidx.startup.InitializationProvider` ← `Failed to create an instance of androidx.work.impl.WorkDatabase` ← `androidx.room.Room.getGeneratedImplementation(Room.java:100)` ← `WorkManagerInitializer`. R8 full mode (AGP 9) stripped the no-arg constructor of Room's generated `WorkDatabase_Impl` even though Room's consumer rule (`-keep class * extends androidx.room.RoomDatabase`) is in the build; WorkManager (pulled in by play-services-ads) instantiates that class by reflection, so the exception fired inside the `InitializationProvider` before the Flutter engine loaded. Fixed with `android/app/proguard-rules.pro` (`-keep class * extends androidx.room.RoomDatabase { *; }` plus `<init>()`) wired into the release `proguardFiles`. Verified in the v6 dex: `WorkDatabase_Impl` has its `<init>()` back, and the release APK boots on the device.
+44. **RevenueCat closed the release build with "Wrong API Key"** — a release bundle built with `RC_ANDROID_KEY=test_…` makes purchases_flutter show a blocking dialog ("This app is using a test API key … The app will close now") right after the first frame. Internal/release builds must omit the define so `Billing` stays disabled until a real `goog_…` key exists.
+45. **AdMob UMP consent is unconfigured** — release log: `UMP info update failed: Publisher misconfiguration … no form(s) configured for the input app ID`. Ads still load with test units, but the consent flow is missing until a GDPR/US-states message is created in AdMob → Privacy & messaging.
 
 ## Release build (internal testing)
 - Upload keystore: `android/upload-keystore.jks` (alias `upload`), credentials in `android/key.properties`. Both gitignored — **back them up**, losing the upload key means a Play support request. Certificate SHA-256: `81:51:D7:9F:B1:00:2B:D4:3D:61:C8:4A:39:AB:0C:82:A7:9D:94:26:48:E0:4E:71:65:00:44:9A:52:E2:CB:05`.
 - Command used for the internal test bundle:
 
 ```powershell
-flutter build appbundle --release --dart-define=ADMOB_TEST_ADS=true --dart-define=RC_ANDROID_KEY=test_tyQKigCCoWOlwvRESjGOAhdUwXI
+flutter build appbundle --release --dart-define=ADMOB_TEST_ADS=true
 ```
 
-- **Current artifact:** `ReelTunes-0.0.2-internal-5.aab` (versionCode 5, versionName 0.0.2, package `com.buildwithanshul.reeltunes`, ~110 MB). Older bundles are deleted so the root only ever holds the newest.
+- **Never pass `RC_ANDROID_KEY=test_…` to a release build.** RevenueCat detects a test key in a non-debug build, shows a blocking "Wrong API Key" dialog and closes the app ("The app will close now to protect the security of test purchases"). Omit the define: `billing.dart` sees an empty key, skips `Purchases.configure`, and the store is disabled instead of killing the app. Only a real `goog_…` key belongs in release.
+- **Current artifact:** `ReelTunes-0.0.2-internal-6.aab` (versionCode 6, versionName 0.0.2, package `com.buildwithanshul.reeltunes`, ~110 MB). Older bundles are deleted so the root only ever holds the newest. VersionCode 5 was uploaded with a fatal startup crash; 6 is the first release build that launches.
 - **versionCode rule:** it comes from `pubspec.yaml` (`version: 0.0.2+N`). Play burns every uploaded code even if the release is deleted, so bump `N` before every upload and put the code in the file name. Renaming an AAB without rebuilding does nothing.
 - RevenueCat key: dashboard → Project settings → API keys → *Google Play* public app-specific key (`goog_…`). Without it `Billing.androidKey` is empty, the store is disabled and the paywall says Pro isn't live. Only `test_…` is available until the Play app + service-account JSON exist, so the internal test cannot complete a real purchase yet.
 - For internal testing keep `ADMOB_TEST_ADS=true` (never tap live ads); drop that define for the production build.
@@ -272,6 +277,7 @@ flutter build appbundle --release --dart-define=ADMOB_TEST_ADS=true --dart-defin
 ```
 E:\Projects\ReelTune\
 ├─ android/app/build.gradle.kts              # appId com.buildwithanshul.reeltunes, minSdk 24, doNotStrip zip.so, release = upload keystore
+├─ android/app/proguard-rules.pro             # Room keeps: R8 must not strip WorkDatabase_Impl.<init>()
 ├─ android/app/src/main/AndroidManifest.xml  # no storage permissions; AudioService + receiver; SEND target
 ├─ android/app/src/main/jniLibs/<abi>/       # libpython.so, libpython.zip.so, libqjs.so, libytdlp.so (arm64/armv7/x86_64)
 ├─ android/app/src/main/kotlin/com/buildwithanshul/reeltunes/
@@ -316,4 +322,6 @@ E:\Projects\ReelTune\
 4. **Hot reload on playlist changes** — `AppStore` listeners must propagate to `_TracksView` immediately.
 5. **Free restriction re-apply** — all gates must re-evaluate when Pro/perk lapses (playlist removal etc.).
 6. **Push to origin/main** — only when explicitly asked. Local history was rewritten on 8 Nov (committer identity fix), so the first push after that needs `--force-with-lease`.
+7. **Real RevenueCat key** — `Billing` is disabled in the shipped internal test because only a `test_…` key exists, and that key closes release builds (bug 44). Needs the Play app + service-account JSON, then a `goog_…` key passed as `RC_ANDROID_KEY` on production builds only.
+8. **AdMob UMP consent form** — create a GDPR / US-states message in AdMob → Privacy & messaging; until then the SDK logs a publisher-misconfiguration error on launch (bug 45).
 
