@@ -221,6 +221,7 @@ flutter build appbundle --release --dart-define=ADMOB_TEST_ADS=true
 - **Current artifact:** `ReelTunes-0.0.2-internal-6.aab` (versionCode 6, versionName 0.0.2, package `com.buildwithanshul.reeltunes`, ~110 MB). Older bundles are deleted so the root only ever holds the newest. VersionCode 5 was uploaded with a fatal startup crash; 6 is the first release build that launches.
 - **versionCode rule:** it comes from `pubspec.yaml` (`version: 0.0.2+N`). Play burns every uploaded code even if the release is deleted, so bump `N` before every upload and put the code in the file name. Renaming an AAB without rebuilding does nothing.
 - RevenueCat key: dashboard → Project settings → API keys → *Google Play* public app-specific key (`goog_…`). Without it `Billing.androidKey` is empty, the store is disabled and the paywall says Pro isn't live. Only `test_…` is available until the Play app + service-account JSON exist, so the internal test cannot complete a real purchase yet.
+- Step-by-step tester flow, service-account setup and AdMob/UMP instructions: `TESTING_PURCHASE_AND_ADS.md`.
 - For internal testing keep `ADMOB_TEST_ADS=true` (never tap live ads); drop that define for the production build.
 - Installing the Play build over the current debug build requires an uninstall (different signing key) → app data resets and the folder must be re-linked once. The mirror restores playlists.
 - Play updates (same package + signature) keep the SAF grant, so users don't re-link after a normal update.
