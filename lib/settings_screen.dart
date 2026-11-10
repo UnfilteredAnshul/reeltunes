@@ -768,6 +768,20 @@ class _DebugTierSectionState extends State<_DebugTierSection> {
           onChanged: (v) => Ads.I.setUseTestAds(v),
         ),
         ListTile(
+          leading: const Icon(Icons.picture_as_pdf),
+          title: const Text('Sample PDF (debug)'),
+          subtitle: const Text('Generate a sample purchase-summary PDF to check the format'),
+          onTap: () async {
+            final saved = await ReceiptPdf.saveSample();
+            if (!mounted) return;
+            showTopToast(
+              context,
+              saved ? 'Sample PDF saved' : 'Cancelled',
+              error: !saved,
+            );
+          },
+        ),
+        ListTile(
           leading: const Icon(Icons.campaign_outlined),
           title: const Text('Ads: unit in use'),
           subtitle: Text(AdConfig.modeLabel),

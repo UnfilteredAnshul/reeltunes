@@ -43,6 +43,20 @@ class ReceiptPdf {
     return uri != null;
   }
 
+  /// Builds a sample PDF and opens the system "save as" sheet. Debug only.
+  static Future<bool> saveSample() async {
+    final bytes = await buildSample();
+    final uri = await FilePicker.saveFile(
+      dialogTitle: 'Save sample purchase summary',
+      fileName: 'ReelTunes-sample-purchase-summary.pdf',
+      bytes: bytes,
+      mimeType: 'application/pdf',
+      type: FileType.custom,
+      allowedExtensions: const ['pdf'],
+    );
+    return uri != null;
+  }
+
   /// The PDF itself, also used by tests / preview tools.
   static Future<Uint8List> build() async {
     final e = Entitlements.I;
@@ -94,198 +108,340 @@ class ReceiptPdf {
           final original = e.originalPurchaseDate;
           final history = e.purchaseHistory;
 
-          return [
-            pw.Container(
-              padding: const pw.EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-              decoration: pw.BoxDecoration(
-                color: blue,
-                borderRadius: pw.BorderRadius.circular(8),
-              ),
-              child: pw.Row(
-                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                children: [
-                  pw.Column(
-                    crossAxisAlignment: pw.CrossAxisAlignment.start,
-                    children: [
-                      pw.Text('ReelTunes',
-                          style: pw.TextStyle(
-                              color: PdfColors.white,
-                              fontSize: 18,
-                              fontWeight: pw.FontWeight.bold)),
-                      pw.SizedBox(height: 2),
-                      pw.Text('Purchase summary',
-                          style: const pw.TextStyle(
-                              color: PdfColors.white, fontSize: 11)),
-                    ],
-                  ),
-                  pw.Text(_dateLong(DateTime.now()),
-                      style: const pw.TextStyle(
-                          color: PdfColors.white, fontSize: 9)),
-                ],
-              ),
-            ),
-            pw.SizedBox(height: 18),
-            pw.Text('Subscription',
-                style: pw.TextStyle(
-                    fontSize: 13,
-                    color: ink,
-                    fontWeight: pw.FontWeight.bold)),
-            pw.SizedBox(height: 8),
-            pw.Container(
-              padding: const pw.EdgeInsets.all(14),
-              decoration: pw.BoxDecoration(
-                color: soft,
-                borderRadius: pw.BorderRadius.circular(8),
-              ),
-              child: pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.start,
-                children: [
-                  line('Plan', plan),
-                  line('Amount', price),
-                  line('Purchase date',
-                      purchased == null ? '—' : _dateLong(purchased)),
-                  if (original != null && purchased != null && original != purchased)
-                    line('Subscribed since', _dateLong(original)),
-                  line('Access until', end == null ? '—' : _dateLong(end)),
-                  line('Auto-renew',
-                      e.willRenew ? 'On — charged by Google Play' : 'Off'),
-                  line('Status', e.statusLabel),
-                  line('Store', e.storeLabel),
-                  line('Reference',
-                      e.productId == null ? '—' : e.productId!),
-                ],
-              ),
-            ),
-            if (e.willRenew && end != null) ...[
-              pw.SizedBox(height: 12),
-              pw.Container(
-                padding: const pw.EdgeInsets.all(12),
-                decoration: pw.BoxDecoration(
-                  color: soft,
-                  border: pw.Border.all(color: rule),
-                  borderRadius: pw.BorderRadius.circular(8),
-                ),
-                child: pw.Text(
-                  'Automatic payment: Google Play will charge $price on '
-                  '${_dateLong(end)} unless you cancel before then.',
-                  style: pw.TextStyle(fontSize: 10, color: ink),
-                ),
-              ),
-            ],
-            if (e.sandboxPurchase) ...[
-              pw.SizedBox(height: 12),
-              pw.Container(
-                padding: const pw.EdgeInsets.all(12),
-                decoration: pw.BoxDecoration(
-                  color: warnBg,
-                  borderRadius: pw.BorderRadius.circular(8),
-                ),
-                child: pw.Text(
-                  'SANDBOX / TEST PURCHASE — no money was charged. This copy '
-                  'exists only because ReelTunes was tested through the '
-                  'RevenueCat Test Store or a Google Play licence tester. It is '
-                  'not proof of payment.',
-                  style: pw.TextStyle(
-                      fontSize: 10,
-                      color: warnInk,
-                      fontWeight: pw.FontWeight.bold),
-                ),
-              ),
-            ],
-            pw.SizedBox(height: 12),
-            pw.Container(
-              padding: const pw.EdgeInsets.all(12),
-              decoration: pw.BoxDecoration(
-                border: pw.Border.all(color: rule),
-                borderRadius: pw.BorderRadius.circular(8),
-              ),
-              child: pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.start,
-                children: [
-                  pw.Text('About this document',
-                      style: pw.TextStyle(
-                          fontSize: 10.5,
-                          color: ink,
-                          fontWeight: pw.FontWeight.bold)),
-                  pw.SizedBox(height: 4),
-                  pw.Text(
-                    'Google Play is the merchant of record for this purchase. '
-                    'This is a purchase summary generated by ReelTunes on your '
-                    'device. It is not a tax invoice, and it is not a Google '
-                    'Play receipt. Google Play issues the official receipt and '
-                    'invoice for every purchase; those are available in your '
-                    'Google Play account and in the email Google sends you.',
-                    style: pw.TextStyle(fontSize: 9.5, color: muted, lineSpacing: 2),
-                  ),
-                  pw.SizedBox(height: 6),
-                  pw.Text(
-                    'Manage or cancel: Google Play → Payments & subscriptions, '
-                    'or play.google.com/store/account/subscriptions. '
-                    'Cancelling stops the next renewal; access continues until '
-                    'the date above. Refunds are handled by Google Play under '
-                    'its refund policy.',
-                    style: pw.TextStyle(fontSize: 9.5, color: muted, lineSpacing: 2),
-                  ),
-                ],
-              ),
-            ),
-            if (history.length > 1) ...[
-              pw.SizedBox(height: 18),
-              pw.Text('Purchase history on this device',
-                  style: pw.TextStyle(
-                      fontSize: 13,
-                      color: ink,
-                      fontWeight: pw.FontWeight.bold)),
-              pw.SizedBox(height: 6),
-              pw.Table(
-                border: pw.TableBorder.all(color: rule, width: 0.5),
-                columnWidths: const {
-                  0: pw.FlexColumnWidth(2.4),
-                  1: pw.FlexColumnWidth(1.6),
-                  2: pw.FlexColumnWidth(1.6),
-                  3: pw.FlexColumnWidth(1.4),
-                },
-                children: [
-                  pw.TableRow(
-                    decoration: pw.BoxDecoration(color: soft),
-                    children: [
-                      _cell('Plan', bold: true),
-                      _cell('Amount', bold: true),
-                      _cell('Purchase date', bold: true),
-                      _cell('Store', bold: true),
-                    ],
-                  ),
-                  for (final r in history.take(8))
-                    pw.TableRow(children: [
-                      _cell(r.planLabel),
-                      _cell(r.priceString.isEmpty ? '—' : r.priceString),
-                      _cell(_dateLong(r.purchasedAt)),
-                      _cell(r.storeLabel),
-                    ]),
-                ],
-              ),
-              pw.SizedBox(height: 4),
-              pw.Text(
-                'This list is kept only on this device and is cleared when the '
-                'app is uninstalled. Google Play and RevenueCat keep the '
-                'authoritative purchase records.',
-                style: pw.TextStyle(fontSize: 8.5, color: muted),
-              ),
-            ],
-            pw.SizedBox(height: 18),
-            pw.Divider(color: rule, thickness: 0.5),
-            pw.SizedBox(height: 4),
-            pw.Text(
-              'Questions about this purchase: $_supportEmail\n'
-              'Generated by ReelTunes on ${_dateTimeLong(DateTime.now())}.',
-              style: pw.TextStyle(fontSize: 8.5, color: muted, lineSpacing: 2),
-            ),
-          ];
+          return _buildContent(
+            plan: plan,
+            price: price,
+            end: end,
+            purchased: purchased,
+            original: original,
+            history: history,
+            sandbox: e.sandboxPurchase,
+            willRenew: e.willRenew,
+            statusLabel: e.statusLabel,
+            storeLabel: e.storeLabel,
+            productId: e.productId,
+            blue: blue,
+            ink: ink,
+            muted: muted,
+            rule: rule,
+            soft: soft,
+            warnBg: warnBg,
+            warnInk: warnInk,
+            line: line,
+          );
         },
       ),
     );
     return doc.save();
   }
+
+  /// Builds a sample PDF with hardcoded demo data for format checking.
+  /// Debug only — not dependent on `Entitlements`.
+  static Future<Uint8List> buildSample() async {
+    final doc = pw.Document(
+      title: 'ReelTunes purchase summary (sample)',
+      author: 'ReelTunes',
+      creator: 'ReelTunes',
+    );
+    final blue = PdfColor.fromHex('#0A5CD6');
+    final ink = PdfColor.fromHex('#1A1A1A');
+    final muted = PdfColor.fromHex('#5C5C5C');
+    final rule = PdfColor.fromHex('#D9D9D9');
+    final soft = PdfColor.fromHex('#F3F6FC');
+    final warnBg = PdfColor.fromHex('#FFF4E0');
+    final warnInk = PdfColor.fromHex('#7A4B00');
+
+    pw.Widget line(String label, String value) => pw.Padding(
+          padding: const pw.EdgeInsets.symmetric(vertical: 3),
+          child: pw.Row(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.SizedBox(
+                width: 120,
+                child: pw.Text(label,
+                    style: pw.TextStyle(fontSize: 10, color: muted)),
+              ),
+              pw.Expanded(
+                child: pw.Text(value,
+                    style: pw.TextStyle(
+                        fontSize: 10.5,
+                        color: ink,
+                        fontWeight: pw.FontWeight.bold)),
+              ),
+            ],
+          ),
+        );
+
+    final now = DateTime.now();
+    final purchased = DateTime(now.year, now.month - 1, now.day);
+    final end = DateTime(now.year, now.month + 1, now.day);
+    final original = DateTime(now.year - 1, now.month, now.day);
+
+    final history = <PurchaseRecord>[
+      PurchaseRecord(
+        productId: 'monthly',
+        planLabel: 'Monthly',
+        priceString: '\$9.99',
+        purchasedAt: DateTime(now.year, now.month - 2, 15),
+        expiresAt: DateTime(now.year, now.month - 1, 15),
+        willRenew: true,
+        sandbox: false,
+        storeLabel: 'Google Play',
+      ),
+      PurchaseRecord(
+        productId: 'yearly',
+        planLabel: 'Yearly',
+        priceString: '\$79.99',
+        purchasedAt: original,
+        expiresAt: DateTime(now.year, now.month, now.day),
+        willRenew: true,
+        sandbox: false,
+        storeLabel: 'Google Play',
+      ),
+    ];
+
+    doc.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.fromLTRB(42, 40, 42, 40),
+        build: (ctx) {
+          return _buildContent(
+            plan: 'Yearly · sample data',
+            price: '\$79.99 / year',
+            end: end,
+            purchased: purchased,
+            original: original,
+            history: history,
+            sandbox: false,
+            willRenew: true,
+            statusLabel: 'Active · sample',
+            storeLabel: 'Google Play (sample)',
+            productId: 'yearly',
+            blue: blue,
+            ink: ink,
+            muted: muted,
+            rule: rule,
+            soft: soft,
+            warnBg: warnBg,
+            warnInk: warnInk,
+            line: line,
+          );
+        },
+      ),
+    );
+    return doc.save();
+  }
+
+  /// Builds the shared PDF content so the real build and the sample build stay
+  /// identical except for the data source.
+  static List<pw.Widget> _buildContent({
+    required String plan,
+    required String price,
+    required DateTime? end,
+    required DateTime? purchased,
+    required DateTime? original,
+    required List<PurchaseRecord> history,
+    required bool sandbox,
+    required bool willRenew,
+    required String statusLabel,
+    required String storeLabel,
+    required String? productId,
+    required PdfColor blue,
+    required PdfColor ink,
+    required PdfColor muted,
+    required PdfColor rule,
+    required PdfColor soft,
+    required PdfColor warnBg,
+    required PdfColor warnInk,
+    required pw.Widget Function(String, String) line,
+  }) => [
+      pw.Container(
+        padding: const pw.EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: pw.BoxDecoration(
+          color: blue,
+          borderRadius: pw.BorderRadius.circular(8),
+        ),
+        child: pw.Row(
+          mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+          children: [
+            pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Text('ReelTunes',
+                    style: pw.TextStyle(
+                        color: PdfColors.white,
+                        fontSize: 18,
+                        fontWeight: pw.FontWeight.bold)),
+                pw.SizedBox(height: 2),
+                pw.Text('Purchase summary',
+                    style: const pw.TextStyle(
+                        color: PdfColors.white, fontSize: 11)),
+              ],
+            ),
+            pw.Text(_dateLong(DateTime.now()),
+                style: const pw.TextStyle(
+                    color: PdfColors.white, fontSize: 9)),
+          ],
+        ),
+      ),
+      pw.SizedBox(height: 18),
+      pw.Text('Subscription',
+          style: pw.TextStyle(
+              fontSize: 13,
+              color: ink,
+              fontWeight: pw.FontWeight.bold)),
+      pw.SizedBox(height: 8),
+      pw.Container(
+        padding: const pw.EdgeInsets.all(14),
+        decoration: pw.BoxDecoration(
+          color: soft,
+          borderRadius: pw.BorderRadius.circular(8),
+        ),
+        child: pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            line('Plan', plan),
+            line('Amount', price),
+            line('Purchase date',
+                purchased == null ? '—' : _dateLong(purchased)),
+            if (original != null && purchased != null && original != purchased)
+              line('Subscribed since', _dateLong(original)),
+            line('Access until', end == null ? '—' : _dateLong(end)),
+            line('Auto-renew',
+                willRenew ? 'On — charged by Google Play' : 'Off'),
+            line('Status', statusLabel),
+            line('Store', storeLabel),
+            line('Reference',
+                productId == null ? '—' : productId!),
+          ],
+        ),
+      ),
+      if (willRenew && end != null) ...[
+        pw.SizedBox(height: 12),
+        pw.Container(
+          padding: const pw.EdgeInsets.all(12),
+          decoration: pw.BoxDecoration(
+            color: soft,
+            border: pw.Border.all(color: rule),
+            borderRadius: pw.BorderRadius.circular(8),
+          ),
+          child: pw.Text(
+            'Automatic payment: Google Play will charge $price on '
+            '${_dateLong(end)} unless you cancel before then.',
+            style: pw.TextStyle(fontSize: 10, color: ink),
+          ),
+        ),
+      ],
+      if (sandbox) ...[
+        pw.SizedBox(height: 12),
+        pw.Container(
+          padding: const pw.EdgeInsets.all(12),
+          decoration: pw.BoxDecoration(
+            color: warnBg,
+            borderRadius: pw.BorderRadius.circular(8),
+          ),
+          child: pw.Text(
+            'SANDBOX / TEST PURCHASE — no money was charged. This copy '
+            'exists only because ReelTunes was tested through the '
+            'RevenueCat Test Store or a Google Play licence tester. It is '
+            'not proof of payment.',
+            style: pw.TextStyle(
+                fontSize: 10,
+                color: warnInk,
+                fontWeight: pw.FontWeight.bold),
+          ),
+        ),
+      ],
+      pw.SizedBox(height: 12),
+      pw.Container(
+        padding: const pw.EdgeInsets.all(12),
+        decoration: pw.BoxDecoration(
+          border: pw.Border.all(color: rule),
+          borderRadius: pw.BorderRadius.circular(8),
+        ),
+        child: pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.Text('About this document',
+                style: pw.TextStyle(
+                    fontSize: 10.5,
+                    color: ink,
+                    fontWeight: pw.FontWeight.bold)),
+            pw.SizedBox(height: 4),
+            pw.Text(
+              'Google Play is the merchant of record for this purchase. '
+              'This is a purchase summary generated by ReelTunes on your '
+              'device. It is not a tax invoice, and it is not a Google '
+              'Play receipt. Google Play issues the official receipt and '
+              'invoice for every purchase; those are available in your '
+              'Google Play account and in the email Google sends you.',
+              style: pw.TextStyle(fontSize: 9.5, color: muted, lineSpacing: 2),
+            ),
+            pw.SizedBox(height: 6),
+            pw.Text(
+              'Manage or cancel: Google Play → Payments & subscriptions, '
+              'or play.google.com/store/account/subscriptions. '
+              'Cancelling stops the next renewal; access continues until '
+              'the date above. Refunds are handled by Google Play under '
+              'its refund policy.',
+              style: pw.TextStyle(fontSize: 9.5, color: muted, lineSpacing: 2),
+            ),
+          ],
+        ),
+      ),
+      if (history.length > 1) ...[
+        pw.SizedBox(height: 18),
+        pw.Text('Purchase history on this device',
+            style: pw.TextStyle(
+                fontSize: 13,
+                color: ink,
+                fontWeight: pw.FontWeight.bold)),
+        pw.SizedBox(height: 6),
+        pw.Table(
+          border: pw.TableBorder.all(color: rule, width: 0.5),
+          columnWidths: const {
+            0: pw.FlexColumnWidth(2.4),
+            1: pw.FlexColumnWidth(1.6),
+            2: pw.FlexColumnWidth(1.6),
+            3: pw.FlexColumnWidth(1.4),
+          },
+          children: [
+            pw.TableRow(
+              decoration: pw.BoxDecoration(color: soft),
+              children: [
+                _cell('Plan', bold: true),
+                _cell('Amount', bold: true),
+                _cell('Purchase date', bold: true),
+                _cell('Store', bold: true),
+              ],
+            ),
+            for (final r in history.take(8))
+              pw.TableRow(children: [
+                _cell(r.planLabel),
+                _cell(r.priceString.isEmpty ? '—' : r.priceString),
+                _cell(_dateLong(r.purchasedAt)),
+                _cell(r.storeLabel),
+              ]),
+          ],
+        ),
+        pw.SizedBox(height: 4),
+        pw.Text(
+          'This list is kept only on this device and is cleared when the '
+          'app is uninstalled. Google Play and RevenueCat keep the '
+          'authoritative purchase records.',
+          style: pw.TextStyle(fontSize: 8.5, color: muted),
+        ),
+      ],
+      pw.SizedBox(height: 18),
+      pw.Divider(color: rule, thickness: 0.5),
+      pw.SizedBox(height: 4),
+      pw.Text(
+        'Questions about this purchase: $_supportEmail\n'
+        'Generated by ReelTunes on ${_dateTimeLong(DateTime.now())}.',
+        style: pw.TextStyle(fontSize: 8.5, color: muted, lineSpacing: 2),
+      ),
+    ];
+
 
   static pw.Widget _cell(String text, {bool bold = false}) => pw.Padding(
         padding: const pw.EdgeInsets.symmetric(horizontal: 5, vertical: 4),
@@ -340,3 +496,4 @@ PurchaseRecord? currentPurchaseRecord() {
     storeLabel: e.storeLabel,
   );
 }
+
