@@ -5,21 +5,26 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="robots" content="noindex" />
     <title>ReelTunes · Codes</title>
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230A5CD6' rx='8'/%3E%3Cpath d='M10 10h12v12H10z' fill='%23fff'/%3E%3C/svg%3E" />
+    <link rel="icon" href="/logo.png" sizes="32x32" />
+    <link rel="apple-touch-icon" href="/icon-512.png" />
     <style>
-      /* Apple-inspired: SF Pro typography, system chrome, high contrast, generous whitespace */
+      /* Apple HIG-compliant design */
+      /* System font stack: SF Pro Text/Display on Apple platforms, fall back cleanly */
       :root {
         --bg: #f5f5f7;
         --panel: #ffffff;
         --line: #d2d2d7;
+        --separator: #e5e5ea;
         --text: #1d1d1f;
-        --text-secondary: #86868b;
+        --text-secondary: #3a3a3c;
+        --text-tertiary: #86868b;
         --accent: #0071e3;
         --accent-hover: #0077ed;
         --ok: #34c759;
         --warn: #ff9500;
         --bad: #ff3b30;
-        --radius: 14px;
+        --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+        --radius: 12px;
       }
 
       * { box-sizing: border-box; }
@@ -30,7 +35,7 @@
         color: var(--text);
         font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
           "Helvetica Neue", Helvetica, Arial, sans-serif;
-        font-size: 14px;
+        font-size: 13px;
         line-height: 1.5;
         min-height: 100vh;
         -webkit-font-smoothing: antialiased;
@@ -38,20 +43,21 @@
 
       button, input, select { font: inherit; }
 
+      /* Buttons - HIG: hit region min 28x28pt on macOS, press state required */
       button {
         border: 0;
-        border-radius: 10px;
+        border-radius: 9px;
         background: var(--accent);
         color: #fff;
         padding: 8px 16px;
         cursor: pointer;
         font-weight: 600;
-        font-size: 14px;
-        transition: background 0.2s, transform 0.1s;
+        font-size: 13px;
+        transition: background 0.1s, filter 0.1s;
       }
 
       button:hover { background: var(--accent-hover); }
-      button:active { transform: scale(0.98); }
+      button:active { filter: brightness(0.9); }
       button:focus { outline: none; box-shadow: 0 0 0 4px rgba(0, 113, 227, 0.3); }
 
       button.btn-ghost {
@@ -64,12 +70,12 @@
 
       button.btn-danger {
         background: transparent;
-        border: 1px solid #d2d2d7;
+        border: 1px solid var(--line);
         color: var(--bad);
       }
 
       button.btn-danger:hover {
-        background: rgba(255, 59, 48, 0.08);
+        background: rgba(255, 59, 48, 0.06);
         border-color: var(--bad);
       }
 
@@ -78,16 +84,16 @@
         border: 1px solid var(--line);
         background: #fff;
         color: var(--text);
-        border-radius: 10px;
-        padding: 11px 14px;
-        font-size: 14px;
+        border-radius: 8px;
+        padding: 9px 12px;
+        font-size: 13px;
         outline: none;
       }
 
       input:focus, select:focus { border-color: var(--accent); }
 
       .hidden { display: none !important; }
-      .muted { color: var(--text-secondary); }
+      .muted { color: var(--text-tertiary); }
       .small { font-size: 12px; }
       .error { color: var(--bad); font-size: 12px; min-height: 18px; margin: 6px 0 0; }
 
@@ -108,12 +114,11 @@
         gap: 10px;
         margin-bottom: 16px;
       }
-      .toggle-label { font-size: 14px; color: var(--text); }
+      .toggle-label { font-size: 13px; color: var(--text); cursor: pointer; }
 
-      /* Typography scale */
-      .display-title { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; margin: 0; }
-      .panel-title { font-size: 17px; font-weight: 700; letter-spacing: -0.5px; margin: 0; }
-      .page-title { font-size: 28px; font-weight: 700; letter-spacing: -0.5px; margin: 0 0 8px; }
+      /* Typography scale per HIG: macOS default 13pt */
+      .page-title { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; margin: 0 0 8px; }
+      .panel-title { font-size: 16px; font-weight: 600; letter-spacing: -0.3px; margin: 0 0 6px; }
 
       /* App mark */
       .app-mark {
@@ -123,6 +128,7 @@
         overflow: hidden;
         border: 1px solid var(--line);
         flex-shrink: 0;
+        background: #fff;
       }
       .app-mark img { width: 100%; height: 100%; object-fit: cover; display: block; }
 
@@ -137,25 +143,25 @@
         width: min(360px, 92%);
         background: var(--panel);
         border: 1px solid var(--line);
-        border-radius: 26px;
+        border-radius: 24px;
         padding: 40px;
-        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08);
+        box-shadow: var(--shadow);
       }
-      .login-card .app-mark { width: 56px; height: 56px; border-radius: 16px; margin-bottom: 24px; border: none; background: linear-gradient(135deg, #0071e3, #0077ed); }
+      .login-card .app-mark { width: 56px; height: 56px; border-radius: 18px; margin-bottom: 28px; border: none; box-shadow: var(--shadow); }
       .login-card .app-mark img { width: 100%; height: 100%; }
-      .login-card h1 { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; margin: 0 0 8px; }
-      .login-card p { margin: 0 0 24px; color: var(--text-secondary); font-size: 15px; }
-      .login-card input { margin-bottom: 18px; }
-      .login-card button { width: 100%; padding: 14px; font-size: 16px; }
+      .login-card h1 { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; margin: 0 0 10px; }
+      .login-card p { margin: 0 0 28px; color: var(--text-secondary); font-size: 15px; line-height: 1.5; }
+      .login-card input { margin-bottom: 20px; }
+      .login-card button { width: 100%; padding: 12px; font-size: 15px; }
 
       /* Shell */
       .topbar {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 16px 24px;
-        border-bottom: 1px solid var(--line);
-        background: rgba(255, 255, 255, 0.6);
+        padding: 14px 24px;
+        border-bottom: 1px solid var(--separator);
+        background: rgba(255, 255, 255, 0.8);
         position: sticky;
         top: 0;
         z-index: 50;
@@ -166,8 +172,8 @@
         align-items: center;
         gap: 12px;
         font-size: 17px;
-        font-weight: 700;
-        letter-spacing: -0.5px;
+        font-weight: 600;
+        letter-spacing: -0.4px;
       }
       .topbar-brand .muted { font-weight: 500; color: var(--text-secondary); }
       .topbar-actions { display: flex; align-items: center; gap: 10px; }
@@ -188,63 +194,63 @@
       }
       .stat {
         background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 16px;
+        border: 1px solid var(--separator);
+        border-radius: 14px;
         padding: 16px;
       }
-      .stat-value { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; line-height: 1.1; }
-      .stat-label { color: var(--text-secondary); font-size: 13px; margin-top: 4px; }
+      .stat-value { font-size: 20px; font-weight: 700; letter-spacing: -0.4px; line-height: 1.1; }
+      .stat-label { color: var(--text-tertiary); font-size: 12px; margin-top: 4px; }
 
       /* Panels */
       .panel {
         background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 18px;
-        padding: 24px;
+        border: 1px solid var(--separator);
+        border-radius: 14px;
+        padding: 20px;
       }
       .panel-head {
         display: flex;
         align-items: flex-start;
         justify-content: space-between;
         gap: 12px;
-        margin-bottom: 20px;
+        margin-bottom: 16px;
       }
       .panel-head > div { flex: 1; }
-      .panel-sub { margin: 4px 0 0; color: var(--text-secondary); font-size: 13px; }
+      .panel-sub { margin: 4px 0 0; color: var(--text-tertiary); font-size: 12px; }
 
-      .toolbar { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+      .toolbar { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
       .toolbar .field { margin-bottom: 0; }
       .toolbar select { width: 150px; }
 
-      .table-wrap { overflow-x: auto; border-radius: 14px; border: 1px solid var(--line); }
+      .table-wrap { overflow-x: auto; border-radius: 12px; border: 1px solid var(--separator); }
       table { width: 100%; border-collapse: collapse; font-size: 13px; }
 
-      th, td { text-align: left; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+      th, td { text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--separator); }
       th {
         font-size: 11px;
         font-weight: 700;
-        letter-spacing: 0.5px;
+        letter-spacing: 0.4px;
         text-transform: uppercase;
-        color: var(--text-secondary);
+        color: var(--text-tertiary);
         background: #f5f5f7;
       }
       tbody tr:last-child td { border-bottom: none; }
       tbody tr:hover { background: #f5f5f7; }
 
-      td.code { font-weight: 700; letter-spacing: 0.2px; font-variant-numeric: tabular-nums; font-size: 14px; }
+      td.code { font-weight: 700; letter-spacing: 0.2px; font-variant-numeric: tabular-nums; font-size: 13px; }
 
       .state {
         font-size: 11px;
         font-weight: 700;
-        padding: 4px 8px;
+        padding: 3px 8px;
         border-radius: 8px;
         border: 1px solid var(--line);
         color: var(--text-secondary);
         white-space: nowrap;
       }
-      .state.live { color: var(--ok); border-color: rgba(52, 199, 89, 0.25); background: rgba(52, 199, 89, 0.08); }
-      .state.revoked { color: var(--bad); border-color: rgba(255, 59, 48, 0.25); background: rgba(255, 59, 48, 0.08); }
-      .state.expired, .state.used { color: var(--warn); border-color: rgba(255, 149, 0, 0.25); background: rgba(255, 149, 0, 0.08); }
+      .state.live { color: var(--ok); border-color: rgba(52, 199, 89, 0.2); background: rgba(52, 199, 89, 0.05); }
+      .state.revoked { color: var(--bad); border-color: rgba(255, 59, 48, 0.2); background: rgba(255, 59, 48, 0.05); }
+      .state.expired, .state.used { color: var(--warn); border-color: rgba(255, 149, 0, 0.2); background: rgba(255, 149, 0, 0.05); }
 
       .milestone {
         font-size: 10px;
@@ -254,26 +260,27 @@
         border-radius: 8px;
         border: 1px solid var(--line);
         color: var(--warn);
-        background: rgba(255, 149, 0, 0.08);
+        background: rgba(255, 149, 0, 0.05);
         white-space: nowrap;
+        margin-left: 6px;
       }
 
-      .empty { padding: 24px; color: var(--text-secondary); text-align: center; font-size: 14px; }
-      .foot { text-align: center; color: var(--text-secondary); font-size: 13px; padding: 8px 0 30px; }
+      .empty { padding: 28px; color: var(--text-tertiary); text-align: center; font-size: 14px; }
+      .foot { text-align: center; color: var(--text-tertiary); font-size: 12px; padding: 8px 0 30px; }
 
       /* Dialog */
       dialog {
         width: min(440px, 92%);
         background: var(--panel);
         border: 1px solid var(--line);
-        border-radius: 24px;
-        padding: 32px;
+        border-radius: 20px;
+        padding: 28px;
         color: var(--text);
-        box-shadow: 0 25px 50px rgba(0, 0, 0, 0.12);
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
       }
-      dialog::backdrop { background: rgba(0, 0, 0, 0.45); backdrop-filter: blur(8px); }
-      .dialog-title { font-size: 20px; font-weight: 700; letter-spacing: -0.5px; margin: 0 0 24px; }
-      .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
+      dialog::backdrop { background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px); }
+      .dialog-title { font-size: 17px; font-weight: 600; letter-spacing: -0.4px; margin: 0 0 20px; }
+      .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
 
       /* Toast */
       .toast {
@@ -284,9 +291,9 @@
         background: #1d1d1f;
         border: none;
         color: #fff;
-        border-radius: 12px;
+        border-radius: 10px;
         padding: 10px 16px;
-        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.25);
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
         z-index: 100;
         font-size: 13px;
         font-weight: 500;
@@ -295,27 +302,16 @@
       @media (max-width: 640px) {
         .topbar { padding: 12px 16px; }
         .topbar-brand .muted { display: none; }
-        main.shell { padding: 20px 16px; }
+        main.shell { padding: 24px 16px; }
         .fields-row { grid-template-columns: 1fr; gap: 0; }
-        .stat-value { font-size: 20px; }
+        .stat-value { font-size: 18px; }
       }
     </style>
   </head>
   <body>
     <div id="login" class="login">
       <div class="login-card">
-        <div class="app-mark">
-          <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <rect width="32" height="32" fill="url(#grad)" rx="8" />
-            <defs>
-              <linearGradient id="grad" x1="0" y1="0" x2="1" y2="1">
-                <stop stop-color="#0071e3" />
-                <stop offset="1" stop-color="#0077ed" />
-              </linearGradient>
-            </defs>
-            <path d="M10 10h12v12H10z" fill="white" />
-          </svg>
-        </div>
+        <div class="app-mark"><img src="/logo.png" alt="ReelTunes" /></div>
         <h1>ReelTunes Codes</h1>
         <p>Sign in to manage promotional codes across every install.</p>
         <form id="login-form">
@@ -332,18 +328,7 @@
     <div id="app" class="hidden">
       <header class="topbar">
         <div class="topbar-brand">
-          <div class="app-mark">
-            <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <rect width="32" height="32" fill="url(#grad)" rx="8" />
-              <defs>
-                <linearGradient id="grad" x1="0" y1="0" x2="1" y2="1">
-                  <stop stop-color="#0071e3" />
-                  <stop offset="1" stop-color="#0077ed" />
-                </linearGradient>
-              </defs>
-              <path d="M10 10h12v12H10z" fill="white" />
-            </svg>
-          </div>
+          <div class="app-mark"><img src="/logo.png" alt="ReelTunes" /></div>
           <span>ReelTunes</span> <span class="muted">· Codes</span>
         </div>
         <div class="topbar-actions">
