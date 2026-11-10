@@ -1348,6 +1348,7 @@ class _PaywallSheetState extends State<_PaywallSheet> {
         Navigator.pop(context);
         if (context.mounted) {
           showTopToast(context, 'Welcome to Pro · no ads');
+          await _promptDownloadSummary(context);
         }
       } else if (report.outcome == PurchaseOutcome.pending) {
         Navigator.pop(context);
@@ -1370,7 +1371,10 @@ class _PaywallSheetState extends State<_PaywallSheet> {
       if (!mounted) return;
       if (report.ok) {
         Navigator.pop(context);
-        if (context.mounted) showTopToast(context, 'Pro restored');
+        if (context.mounted) {
+          showTopToast(context, 'Pro restored');
+          await _promptDownloadSummary(context);
+        }
       } else if (context.mounted) {
         showTopToast(context, report.message ?? 'Nothing to restore',
             error: report.outcome != PurchaseOutcome.unavailable);
@@ -1407,6 +1411,33 @@ class _PaywallSheetState extends State<_PaywallSheet> {
     } finally {
       if (mounted) setState(() => busy = false);
     }
+  }
+
+  /// After a successful purchase, ask if the user wants to download the
+  /// purchase summary PDF right now.
+  Future<void> _promptDownloadSummary(BuildContext ctx) async {
+    final ok = await showDialog<bool>(
+      context: ctx,
+      builder: (dialogCtx) => AlertDialog(
+        title: const Text('Download purchase summary?'),
+        content: const Text(
+          'Save a PDF summary of this purchase to your phone. '
+          'Google Play remains the merchant of record; this is not a tax invoice.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx, false),
+            child: const Text('Not now'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogCtx, true),
+            child: const Text('Download'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || ok != true) return;
+    await _downloadReceipt();
   }
 
   /// Cancellation always happens in Google Play (the merchant of record).

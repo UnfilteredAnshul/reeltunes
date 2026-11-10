@@ -15,6 +15,7 @@
 //   • +1 playlist ×2 → 2 bonus playlists for 60 days (total 4)
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -60,7 +61,12 @@ class CoinWallet extends ChangeNotifier {
   final Map<String, int> _perkExpiry = {};
   /// perk id -> number of times purchased (while active)
   final Map<String, int> _perkCount = {};
+  /// Coin-shop purchase history, newest first.
+  final List<CoinPurchaseRecord> _coinHistory = [];
   Timer? _expiry;
+
+  /// Coin-shop purchase history, newest first (separate from real purchases).
+  List<CoinPurchaseRecord> get coinHistory => List.unmodifiable(_coinHistory);
 
   /// All purchasable perks, in shop order.
   static const List<CoinPerk> perks = const [
@@ -232,6 +238,17 @@ class CoinWallet extends ChangeNotifier {
     }
     // Always stack the count (bonus tracks/playlists accumulate).
     _perkCount[p.id] = (perkCount(p.id) + 1);
+    // Record in coin-shop history (separate from real purchase history).
+    _coinHistory.insert(0, CoinPurchaseRecord(
+      perkId: p.id,
+      title: p.title,
+      cost: p.cost,
+      purchasedAt: now,
+    ));
+    if (_coinHistory.length > _coinHistoryLimit) {
+      _coinHistory.removeRange(_coinHistoryLimit, _coinHistory.length);
+    }
+    await _saveCoinHistory();
     await _savePerk(p.id);
     _scheduleExpiry();
     notifyListeners();
@@ -297,6 +314,20 @@ class CoinWallet extends ChangeNotifier {
       return !at.isAfter(DateTime.now());
     });
     _perkCount.removeWhere((id, _) => !isPerkActive(id));
+    // Load coin-shop purchase history (separate from real purchase history).
+    final raw = p.getString('coinHistory');
+    if (raw != null && raw.isNotEmpty) {
+      try {
+        final data = jsonDecode(raw);
+        if (data is List) {
+          for (final item in data) {
+            if (CoinPurchaseRecord.fromJson(item) case final CoinPurchaseRecord r) {
+              _coinHistory.add(r);
+            }
+          }
+        }
+      } catch (_) {}
+    }
     _scheduleExpiry();
     notifyListeners();
   }
@@ -309,6 +340,15 @@ class CoinWallet extends ChangeNotifier {
     if (ms == null) return;
     await _prefs?.setInt('coinPerk_$id', ms);
     await _prefs?.setInt('coinPerkCount_$id', _perkCount[id] ?? 1);
+  }
+
+  Future<void> _saveCoinHistory() async {
+    final p = _prefs;
+    if (p == null) return;
+    await p.setString(
+      'coinHistory',
+      jsonEncode([for (final r in _coinHistory) r.toJson()]),
+    );
   }
 
   // ---- expiry ------------------------------------------------------------
@@ -331,3 +371,44 @@ class CoinWallet extends ChangeNotifier {
     });
   }
 }
+
+/// One coin-shop purchase, recorded on this device only.
+///
+/// Separate from the real purchase summary above: coin perks are bought with
+/// earned coins, not money, and Google Play is not involved.
+class CoinPurchaseRecord {
+  const CoinPurchaseRecord({
+    required this.perkId,
+    required this.title,
+    required this.cost,
+    required this.purchasedAt,
+  });
+
+  final String perkId;
+  final String title;
+  final int cost;
+  final DateTime purchasedAt;
+
+  Map<String, dynamic> toJson() => {
+    'perkId': perkId,
+    'title': title,
+    'cost': cost,
+    'purchasedAt': purchasedAt.millisecondsSinceEpoch,
+  };
+
+  static CoinPurchaseRecord? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final perkId = raw['perkId']?.toString();
+    final ms = raw['purchasedAt'];
+    if (perkId == null || perkId.isEmpty || ms is! int || ms <= 0) return null;
+    return CoinPurchaseRecord(
+      perkId: perkId,
+      title: raw['title']?.toString() ?? 'Perk',
+      cost: (raw['cost'] as num?)?.toInt() ?? 0,
+      purchasedAt: DateTime.fromMillisecondsSinceEpoch(ms),
+    );
+  }
+}
+
+/// Maximum coin-shop history entries kept on the device.
+const int _coinHistoryLimit = 50;
