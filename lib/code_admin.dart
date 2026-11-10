@@ -15,8 +15,22 @@ import 'entitlements.dart';
 import 'promo.dart';
 import 'top_toast.dart';
 
-class CodeDashboardScreen extends StatelessWidget {
+class CodeDashboardScreen extends StatefulWidget {
   const CodeDashboardScreen({super.key});
+
+  @override
+  State<CodeDashboardScreen> createState() => _CodeDashboardScreenState();
+}
+
+class _CodeDashboardScreenState extends State<CodeDashboardScreen> {
+  @override
+  void initState() {
+    super.initState();
+    final promo = PromoEngine.I;
+    if (promo.serverConnected) {
+      promo.refreshServer();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -25,6 +39,20 @@ class CodeDashboardScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text('Code dashboard'),
         actions: [
+          IconButton(
+            tooltip: 'Refresh',
+            icon: const Icon(Icons.refresh),
+            onPressed: () async {
+              final promo = PromoEngine.I;
+              if (!promo.serverConnected) {
+                showTopToast(context, 'Backend not connected');
+                return;
+              }
+              final result = await promo.refreshServer();
+              if (!context.mounted) return;
+              showTopToast(context, result.message);
+            },
+          ),
           IconButton(
             tooltip: 'New code',
             icon: const Icon(Icons.add),
@@ -37,9 +65,19 @@ class CodeDashboardScreen extends StatelessWidget {
         builder: (context, _) {
           final promo = PromoEngine.I;
           final e = Entitlements.I;
+          final stats = promo.serverStats;
+          final connected = promo.serverConnected;
           return ListView(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
             children: [
+              _BackendCard(
+                onConnect: () => _connect(context),
+                onDisconnect: () async {
+                  await PromoEngine.I.disconnectServer();
+                  if (context.mounted) showTopToast(context, 'Disconnected');
+                },
+              ),
+              const SizedBox(height: 10),
               Card(
                 color: scheme.surfaceContainerHighest,
                 child: Padding(
@@ -73,17 +111,30 @@ class CodeDashboardScreen extends StatelessWidget {
                         children: [
                           _Stat(
                             label: 'Live codes',
-                            value: '${promo.liveCodeCount}',
+                            value:
+                                '${stats?['live'] ?? promo.liveCodeCount}',
                           ),
                           _Stat(
                             label: 'All codes',
-                            value: '${promo.codeCount}',
+                            value: '${stats?['codes'] ?? promo.codeCount}',
                           ),
                           _Stat(
                             label: 'Redemptions',
-                            value: '${promo.redemptionCount}',
+                            value:
+                                '${stats?['redemptions'] ?? promo.redemptionCount}',
                           ),
-                          _Stat(label: 'Device', value: promo.deviceShort),
+                          _Stat(
+                            label: 'Device',
+                            value: promo.deviceShort,
+                            onTap: () async {
+                              await Clipboard.setData(
+                                ClipboardData(text: promo.deviceId),
+                              );
+                              if (context.mounted) {
+                                showTopToast(context, 'Device ID copied');
+                              }
+                            },
+                          ),
                         ],
                       ),
                     ],
@@ -99,9 +150,10 @@ class CodeDashboardScreen extends StatelessWidget {
               const SizedBox(height: 20),
               _SectionHeader(
                 title: 'Codes',
-                subtitle:
-                    'One redemption per device. Codes grant time, never '
-                    'a price.',
+                subtitle: connected
+                    ? 'Shared registry. Creating here changes every install.'
+                    : 'One redemption per device. Codes grant time, never '
+                          'a price.',
                 trailing: TextButton.icon(
                   onPressed: () => _openCreate(context),
                   icon: const Icon(Icons.add, size: 18),
@@ -112,8 +164,11 @@ class CodeDashboardScreen extends StatelessWidget {
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 12),
                   child: Text(
-                    'No codes yet. Create one to test the redeem flow — it works '
-                    'immediately, no server needed.',
+                    connected
+                        ? 'No codes yet. Create one and it works everywhere '
+                              'within seconds.'
+                        : 'No codes yet. Connect the backend to share codes '
+                              'across every install.',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 )
@@ -122,13 +177,17 @@ class CodeDashboardScreen extends StatelessWidget {
               const SizedBox(height: 20),
               _SectionHeader(
                 title: 'Redemptions',
-                subtitle: 'Newest first. Device tag only.',
+                subtitle: connected
+                    ? 'Shared log, newest first. Device tag only.'
+                    : 'Newest first. Device tag only.',
               ),
               if (promo.redemptions.isEmpty)
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 8),
                   child: Text(
-                    'Nothing redeemed on this phone yet.',
+                    connected
+                        ? 'Nothing redeemed yet.'
+                        : 'Nothing redeemed on this phone yet.',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 )
@@ -156,31 +215,39 @@ class CodeDashboardScreen extends StatelessWidget {
                         run: () => PromoEngine.I.revokeAll(),
                       ),
                     ),
-                    const Divider(height: 1),
-                    ListTile(
-                      leading: const Icon(Icons.delete_sweep_outlined),
-                      title: const Text('Clear redemption log'),
-                      subtitle: const Text(
-                        'Test data only. On a real server this is audit history',
+                    if (!connected) ...[
+                      const Divider(height: 1),
+                      ListTile(
+                        leading: const Icon(Icons.delete_sweep_outlined),
+                        title: const Text('Clear redemption log'),
+                        subtitle: const Text(
+                          'Local test data only. Server history is permanent',
+                        ),
+                        onTap: () => _confirm(
+                          context,
+                          title: 'Clear the log?',
+                          body:
+                              'The device history is erased, so the same codes '
+                              'can be redeemed again on this phone.',
+                          action: 'Clear',
+                          run: () async {
+                            await PromoEngine.I.clearLog();
+                            return PromoResult.ok('Log cleared');
+                          },
+                        ),
                       ),
-                      onTap: () => _confirm(
-                        context,
-                        title: 'Clear the log?',
-                        body:
-                            'The device history is erased, so the same codes '
-                            'can be redeemed again on this phone.',
-                        action: 'Clear',
-                        run: () => PromoEngine.I.clearLog(),
-                      ),
-                    ),
+                    ],
                   ],
                 ),
               ),
               const SizedBox(height: 16),
               Text(
-                'When the Cloudflare Worker is live, this screen keeps its UI '
-                'and PromoEngine.redeem() posts to /redeem instead. The local '
-                'registry then only exists in debug builds.',
+                connected
+                    ? 'Reading ${PromoEngine.I.serverHost}. Revoking stops '
+                          'future redemptions on every install; Pro time that '
+                          'was already granted is untouched.'
+                    : 'Connect the backend to load the shared code registry. '
+                          'Without it, codes only exist on this phone.',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ],
@@ -188,6 +255,17 @@ class CodeDashboardScreen extends StatelessWidget {
         },
       ),
     );
+  }
+
+  Future<void> _connect(BuildContext context) async {
+    final message = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => const _ConnectSheet(),
+    );
+    if (message == null || !context.mounted) return;
+    showTopToast(context, message);
   }
 
   Future<void> _openCreate(BuildContext context) async {
@@ -206,7 +284,7 @@ class CodeDashboardScreen extends StatelessWidget {
     required String title,
     required String body,
     required String action,
-    required Future<void> Function() run,
+    required Future<PromoResult> Function() run,
   }) async {
     final ok = await showDialog<bool>(
       context: context,
@@ -226,9 +304,9 @@ class CodeDashboardScreen extends StatelessWidget {
       ),
     );
     if (ok != true) return;
-    await run();
+    final result = await run();
     if (!context.mounted) return;
-    showTopToast(context, action == 'Clear' ? 'Log cleared' : 'Codes revoked');
+    showTopToast(context, result.message);
   }
 }
 
@@ -237,20 +315,25 @@ class CodeDashboardScreen extends StatelessWidget {
 class _Stat extends StatelessWidget {
   final String label;
   final String value;
-  const _Stat({required this.label, required this.value});
+  final VoidCallback? onTap;
+  const _Stat({required this.label, required this.value, this.onTap});
 
   @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Text(
-        value,
-        style: Theme.of(
-          context,
-        ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-      ),
-      Text(label, style: Theme.of(context).textTheme.bodySmall),
-    ],
+  Widget build(BuildContext context) => InkWell(
+    onTap: onTap,
+    borderRadius: BorderRadius.circular(6),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          value,
+          style: Theme.of(
+            context,
+          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+        ),
+        Text(label, style: Theme.of(context).textTheme.bodySmall),
+      ],
+    ),
   );
 }
 
@@ -292,6 +375,146 @@ class _SectionHeader extends StatelessWidget {
       ],
     ),
   );
+}
+
+class _BackendCard extends StatelessWidget {
+  final VoidCallback onConnect;
+  final VoidCallback onDisconnect;
+  const _BackendCard({required this.onConnect, required this.onDisconnect});
+
+  @override
+  Widget build(BuildContext context) {
+    final promo = PromoEngine.I;
+    final scheme = Theme.of(context).colorScheme;
+    final connected = promo.serverConnected;
+    final online = promo.serverOnline;
+    return Card(
+      child: ListTile(
+        leading: Icon(
+          connected
+              ? (online ? Icons.cloud_done_outlined : Icons.cloud_off_outlined)
+              : Icons.cloud_off_outlined,
+          color: connected && online ? scheme.primary : scheme.outline,
+        ),
+        title: Text(connected ? 'Backend connected' : 'Backend not connected'),
+        subtitle: Text(
+          connected
+              ? '${promo.serverHost} · ${online ? 'live' : 'offline, showing cached data'}'
+              : 'Shared codes need the Cloudflare dashboard.',
+        ),
+        trailing: TextButton(
+          onPressed: connected ? onDisconnect : onConnect,
+          child: Text(connected ? 'Disconnect' : 'Connect'),
+        ),
+      ),
+    );
+  }
+}
+
+class _ConnectSheet extends StatefulWidget {
+  const _ConnectSheet();
+
+  @override
+  State<_ConnectSheet> createState() => _ConnectSheetState();
+}
+
+class _ConnectSheetState extends State<_ConnectSheet> {
+  final _token = TextEditingController();
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _token.dispose();
+    super.dispose();
+  }
+
+  Future<void> _connect() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    final result = await PromoEngine.I.connectServer(_token.text);
+    if (!mounted) return;
+    if (!result.ok) {
+      setState(() {
+        _busy = false;
+        _error = result.message;
+      });
+      return;
+    }
+    Navigator.of(context).pop(result.message);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        20,
+        0,
+        20,
+        20 + MediaQuery.of(context).viewInsets.bottom,
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Connect the dashboard',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Paste the admin token. It is sent over HTTPS once, then kept in '
+              'this phone\'s settings only. One connect is enough: codes created '
+              'here go straight to the shared registry.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              PromoEngine.I.serverHost,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: _token,
+              enabled: !_busy,
+              obscureText: true,
+              autocorrect: false,
+              enableSuggestions: false,
+              decoration: const InputDecoration(
+                labelText: 'Admin token',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 10),
+              Text(
+                _error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ],
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: _busy ? null : _connect,
+                child: _busy
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Connect'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _BuiltInTile extends StatelessWidget {
@@ -368,17 +591,15 @@ class _CodeTile extends StatelessWidget {
           onSelected: (v) async {
             switch (v) {
               case 'revoke':
-                await PromoEngine.I.setRevoked(code.code, !code.revoked);
-                if (context.mounted) {
-                  showTopToast(
-                    context,
-                    code.revoked ? 'Code switched on' : 'Code revoked',
-                  );
-                }
+                final result = await PromoEngine.I.setRevoked(
+                  code.code,
+                  !code.revoked,
+                );
+                if (context.mounted) showTopToast(context, result.message);
                 break;
               case 'delete':
-                await PromoEngine.I.deleteCode(code.code);
-                if (context.mounted) showTopToast(context, 'Code deleted');
+                final result = await PromoEngine.I.deleteCode(code.code);
+                if (context.mounted) showTopToast(context, result.message);
                 break;
             }
           },

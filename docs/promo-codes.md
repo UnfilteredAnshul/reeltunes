@@ -1,8 +1,10 @@
 # ReelTunes — Codes, referrals & admin dashboard
 
 > Companion to `free-vs-pro.md`.
-> **Phase 1 is shipped** (local engine, in-app dashboard): see §12. The rest of
-> this document is the server design it will move onto, unchanged.
+> **Phase 1 shipped** (local engine, in-app dashboard): see §12.
+> **Phase 2 shipped** (Cloudflare Worker + D1 + web dashboard): see §13. The
+> app now redeems against the shared registry; the local engine is the offline
+> admin cache.
 > All of it will live on the same Cloudflare Worker as the entitlement service,
 > so there is still **one backend, one bill (₹0), one dashboard.**
 
@@ -315,3 +317,62 @@ Only `PromoEngine.redeem()` gains a network branch (POST `/redeem` →
 `{plan, exp, signedEntitlement}`), and `code_admin.dart` switches its list from
 the local registry to `GET /admin/codes`. The UI, the bottom sheet, the
 `Entitlements` fields and the mirror format stay exactly as they are.
+
+---
+
+## 13. Phase 2 � shared Worker + dashboard (shipped 2026-11-11)
+
+The phone is no longer the server. A code created in the dashboard works on
+every install on its next redeem, usually within seconds.
+
+| Piece | Where |
+|---|---|
+| Worker + static dashboard | `worker/codes/` |
+| D1 schema | `worker/codes/schema.sql` |
+| API + admin routes | `worker/codes/src/index.js` |
+| Dashboard UI | `worker/codes/public/` |
+| App transport | `lib/promo_api.dart` |
+| App rules + cache | `lib/promo.dart` |
+
+Live at **https://reeltunes-codes.buildwise.workers.dev**.
+
+### What the app does now
+
+1. `PromoEngine.redeem()` posts the code, a random device ID and a random
+   install ID to `/api/redeem`.
+2. The Worker checks the shared `codes` table, records one redemption per
+   device, and returns the grant length.
+3. The app writes the grant into `Entitlements` exactly like a purchase. The
+   library mirror keeps it across a reinstall.
+4. If the Worker cannot be reached, codes created on that phone still work from
+   the local registry. Server codes are never cached as strings, so a revoked
+   code cannot be replayed offline.
+
+The debug built-ins (`ANSHUL2012`, `FREEVERSION`) stay local and stay
+`kDebugMode`-only. In release the same master code can be configured as the
+Worker secret `MASTER_CODE`; it only works from a device in `master_devices`.
+
+### Dashboard
+
+Open the Worker URL in a browser. Paste the admin token once; it is stored in
+that browser's local storage. The page polls every 15 seconds, so a code
+created on the phone appears on the web and vice versa.
+
+Screens now live: overview counters, codes table with search/state filter,
+create, revoke/unrevoke, delete, recent redemptions, per-code log, revoke all.
+
+The in-app dashboard (Settings ? Code dashboard) can connect to the same Worker
+with the same token: paste it once, then create/revoke/delete against the shared
+registry. The token is never compiled into the APK.
+
+### Not built yet
+
+- Creator/referral ladder tables (`creators`, `creator_grants`) and views.
+- Play Integrity verdicts on `/redeem`; the `integrity` column is not in the
+  phase-2 schema yet.
+- Campaign overview screen beyond the free-text campaign column.
+- Signed Ed25519 entitlements. The server is authoritative at redeem time; the
+  local grant remains editable like the purchase flag, which is accepted for
+  now.
+- Automatic revocation of already-granted Pro when a code is revoked. Revoking
+  stops future redemptions only, matching the current UI copy.

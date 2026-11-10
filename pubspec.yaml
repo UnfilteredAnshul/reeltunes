@@ -26,6 +26,8 @@ dependencies:
   # Local purchase-summary PDF. Generated on the device, saved through the
   # system file picker; nothing is emailed or uploaded.
   pdf: ^3.11.3
+  # Redeem codes and the code dashboard talk to the Cloudflare Worker.
+  http: ^1.2.0
 
 dev_dependencies:
   flutter_test:

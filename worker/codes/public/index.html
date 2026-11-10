@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>ReelTunes codes</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div id="login" class="login hidden">
+      <form id="login-form" class="login-card">
+        <div class="brand">ReelTunes</div>
+        <h1>Code dashboard</h1>
+        <p class="muted">
+          Paste the admin token. It stays in this browser only.
+        </p>
+        <input
+          id="token"
+          type="password"
+          autocomplete="current-password"
+          placeholder="Admin token"
+          required
+        />
+        <button type="submit">Open dashboard</button>
+        <p id="login-error" class="error"></p>
+      </form>
+    </div>
+
+    <div id="app" class="hidden">
+      <header class="topbar">
+        <div class="brand">ReelTunes <span class="muted">codes</span></div>
+        <div class="topbar-actions">
+          <span id="sync" class="muted small">connecting</span>
+          <button id="refresh" class="ghost" type="button">Refresh</button>
+          <button id="signout" class="ghost" type="button">Sign out</button>
+        </div>
+      </header>
+
+      <main>
+        <section class="stats" id="stats"></section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>Codes</h2>
+              <p class="muted small">
+                Changes apply to every install on its next redeem.
+              </p>
+            </div>
+            <button id="new-code" type="button">New code</button>
+          </div>
+
+          <div class="toolbar">
+            <input id="search" type="search" placeholder="Search code" />
+            <select id="state">
+              <option value="">All states</option>
+              <option value="live">Live</option>
+              <option value="revoked">Revoked</option>
+              <option value="expired">Expired</option>
+              <option value="used">Fully used</option>
+            </select>
+            <button id="revoke-all" class="danger ghost" type="button">
+              Revoke all
+            </button>
+          </div>
+
+          <div class="table-wrap">
+            <table id="codes">
+              <thead>
+                <tr>
+                  <th>Code</th>
+                  <th>Grant</th>
+                  <th>Uses</th>
+                  <th>Campaign</th>
+                  <th>State</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <p id="codes-empty" class="empty hidden">No codes match.</p>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2 id="redemptions-title">Recent redemptions</h2>
+              <p class="muted small">
+                Device tag only. One redemption per code per device.
+              </p>
+            </div>
+            <button id="clear-filter" class="ghost hidden" type="button">
+              Show all
+            </button>
+          </div>
+          <div class="table-wrap">
+            <table id="redemptions">
+              <thead>
+                <tr>
+                  <th>Code</th>
+                  <th>Device</th>
+                  <th>Grant</th>
+                  <th>When</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <p id="redemptions-empty" class="empty hidden">Nothing yet.</p>
+        </section>
+
+        <p class="foot muted small">
+          ReelTunes codes grant time, never a Play price. Revoking a code stops
+          future redemptions; existing Pro time is untouched.
+        </p>
+      </main>
+    </div>
+
+    <dialog id="create-dialog">
+      <form id="create-form">
+        <h2>New code</h2>
+        <label>
+          Type
+          <select id="create-type">
+            <option value="pro_grant">Pro grant (days)</option>
+            <option value="pro_long">Long Pro grant (days)</option>
+            <option value="master">Lifetime Pro</option>
+          </select>
+        </label>
+        <label>
+          Code
+          <input
+            id="create-code"
+            type="text"
+            maxlength="24"
+            placeholder="Leave empty to generate RTXXXXXXXX"
+            autocapitalize="characters"
+          />
+        </label>
+        <div class="row">
+          <label>
+            Days of Pro
+            <input id="create-days" type="number" min="1" max="3650" value="30" />
+          </label>
+          <label>
+            Max uses
+            <input id="create-max" type="number" min="0" value="0" />
+          </label>
+        </div>
+        <div class="row">
+          <label>
+            Code valid for (days)
+            <input id="create-valid" type="number" min="0" value="0" />
+          </label>
+          <label>
+            Campaign
+            <input id="create-campaign" type="text" placeholder="launch-1000" />
+          </label>
+        </div>
+        <label>
+          Notes
+          <input id="create-notes" type="text" placeholder="Optional" />
+        </label>
+        <p class="muted small">
+          0 uses means unlimited. 0 valid days means the code never expires.
+        </p>
+        <p id="create-error" class="error"></p>
+        <div class="dialog-actions">
+          <button id="create-cancel" class="ghost" type="button">Cancel</button>
+          <button type="submit">Create code</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div id="toast" class="toast hidden"></div>
+    <script src="./app.js"></script>
+  </body>
+</html>
