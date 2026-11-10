@@ -1056,9 +1056,13 @@ class _TracksView extends StatelessWidget {
       return List<Track?>.of(list);
     }
     final out = <Track?>[];
+    // Free tier: 1 native ad when under 10 audios, 2 when over 10.
+    final adCount = list.length > 10 ? 2 : 1;
     for (var i = 0; i < list.length; i++) {
       out.add(list[i]);
-      if ((i == 7 || i == 17) && i != list.length - 1) out.add(null);
+      if (adCount == 2 && i == 7 && i != list.length - 1) out.add(null);
+      if (adCount == 1 && i == 7 && i != list.length - 1) out.add(null);
+      if (adCount == 2 && i == 17 && i != list.length - 1) out.add(null);
     }
     return out;
   }

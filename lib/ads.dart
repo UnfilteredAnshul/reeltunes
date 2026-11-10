@@ -37,7 +37,6 @@ class Ads extends ChangeNotifier {
 
   AppOpenAd? _appOpen;
   bool _appOpenLoading = false;
-  bool _appOpenShownThisLaunch = false;
 
   RewardedAd? _rewarded;
   bool _rewardedLoading = false;
@@ -427,19 +426,15 @@ class Ads extends ChangeNotifier {
     }
   }
 
-  /// Shows the app-open ad at most once per launch and at most once every four
-  /// hours. Safe no-op for Pro / trial / an active coin-shop ad-free window.
+  /// Shows the app-open ad on every cold start when an ad is available.
+  /// Safe no-op for Pro / trial / an active coin-shop ad-free window.
   Future<void> maybeShowAppOpen() async {
     if (!Entitlements.I.showAds) return;
-    if (_appOpenShownThisLaunch) return;
     await init();
-    // Make sure the ad is warming up — the splash may finish before the
-    // consent-driven preload inside _start() has completed.
+    // Make sure the ad is warming up.
     unawaited(preloadAppOpen());
     final prefs = await SharedPreferences.getInstance();
-    final last = prefs.getInt('adAppOpenShownMs') ?? 0;
     final now = DateTime.now().millisecondsSinceEpoch;
-    if (now - last < const Duration(hours: 4).inMilliseconds) return;
 
     // Give the preloaded ad a generous window so a slow consent flow or ad
     // fetch doesn't cause us to miss the slot entirely.
@@ -450,7 +445,6 @@ class Ads extends ChangeNotifier {
     final ad = _appOpen;
     if (ad == null) return;
     _appOpen = null;
-    _appOpenShownThisLaunch = true;
     await prefs.setInt('adAppOpenShownMs', now);
 
     final done = Completer<void>();

@@ -98,6 +98,10 @@ class _RootScreenState extends State<RootScreen>
       // Load the audios folder grant, restore a mirror after a reinstall and
       // pick up anything dropped in with a file manager.
       await LibrarySync.init();
+      // Configure RevenueCat before ads start loading, so ad events are
+      // reported to RevenueCat Charts. Ads load in the background and never
+      // block the splash.
+      await Billing.I.init();
       // AdMob + UMP consent warm up in the background: the free-tier banner
       // waits for `Ads.I.ready`, so the splash never blocks on the ad SDK.
       unawaited(Ads.I.init());
@@ -122,10 +126,6 @@ class _RootScreenState extends State<RootScreen>
       // App-open ad (Free only, max once per 4 h). It waits briefly for the
       // preloaded unit and silently gives up when there is no fill.
       unawaited(Ads.I.maybeShowAppOpen());
-      // The store check runs after the library is on screen: a slow Play
-      // connection must never hold up the splash. It corrects the plan (and
-      // therefore the caps and ads) as soon as it answers.
-      _syncStore();
       // 3-day / 1-day nudge, once each. Never stacked on the first-run sheet.
       if (AppStore.I.audiosLinked) _maybeTrialReminder();
     });
@@ -134,7 +134,10 @@ class _RootScreenState extends State<RootScreen>
   /// Configures RevenueCat once, then refreshes the entitlement. Safe no-op
   /// when the build has no store key. Everything gated reads `Entitlements`,
   /// which is a `ChangeNotifier`, so the UI corrects itself.
-  Future<void> _syncStore() => Billing.I.init();
+  Future<void> _syncStore() async {
+    // Already awaited in initState before Ads.I.init() so ad events are
+    // captured from the first load.
+  }
 
   /// One-tap repair for a lapsed SAF grant. Android drops the persisted folder
   /// permission on reinstall, a system permission reset or an OEM clean-up;
