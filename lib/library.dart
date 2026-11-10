@@ -1055,14 +1055,26 @@ class _TracksView extends StatelessWidget {
     if (!Entitlements.I.showAds || store.arrangingTracks) {
       return List<Track?>.of(list);
     }
+    if (list.isEmpty) return [];
     final out = <Track?>[];
     // Free tier: 1 native ad when under 10 audios, 2 when over 10.
+    // Always show at least one ad even when the list is short.
     final adCount = list.length > 10 ? 2 : 1;
     for (var i = 0; i < list.length; i++) {
       out.add(list[i]);
+      // First ad after the 7th item (index 6).
+      if (adCount == 1 && i == 6 && i != list.length - 1) out.add(null);
+      // First ad after the 8th item (index 7) for long lists.
       if (adCount == 2 && i == 7 && i != list.length - 1) out.add(null);
-      if (adCount == 1 && i == 7 && i != list.length - 1) out.add(null);
+      // Second ad after the 18th item (index 17) for long lists.
       if (adCount == 2 && i == 17 && i != list.length - 1) out.add(null);
+    }
+    // Short list: pin one ad at the end so it always shows.
+    if (adCount == 1 && out.last != null) out.add(null);
+    // Long list: make sure both ads appear even if positions were missed.
+    if (adCount == 2) {
+      final already = out.where((e) => e == null).length;
+      if (already < adCount && out.last != null) out.add(null);
     }
     return out;
   }

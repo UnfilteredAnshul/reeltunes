@@ -294,20 +294,6 @@ class Ads extends ChangeNotifier {
     _rewarded = null;
 
     var earned = false;
-    final done = Completer<bool>();
-    ad.setTrackingFullScreenContentCallback(FullScreenContentCallback(
-      onAdDismissedFullScreenContent: (a) {
-        a.dispose();
-        if (!done.isCompleted) done.complete(earned);
-        unawaited(preloadRewarded());
-      },
-      onAdFailedToShowFullScreenContent: (a, error) {
-        a.dispose();
-        debugPrint('rewarded show failed: ${error.message}');
-        if (!done.isCompleted) done.complete(false);
-        unawaited(preloadRewarded());
-      },
-    ));
     try {
       await ad.showAndTrack(
         onUserEarnedReward: (_, _) => earned = true,
@@ -317,8 +303,9 @@ class Ads extends ChangeNotifier {
       debugPrint('rewarded threw: $e');
       return false;
     }
-    return done.future.timeout(const Duration(minutes: 3),
-        onTimeout: () => earned);
+    ad.dispose();
+    unawaited(preloadRewarded());
+    return earned;
   }
 
   // ---- download / import gate --------------------------------------------
@@ -371,20 +358,6 @@ class Ads extends ChangeNotifier {
     _downloadAd = null;
 
     var earned = false;
-    final done = Completer<bool>();
-    ad.setTrackingFullScreenContentCallback(FullScreenContentCallback(
-      onAdDismissedFullScreenContent: (a) {
-        a.dispose();
-        if (!done.isCompleted) done.complete(earned);
-        unawaited(preloadDownloadAd());
-      },
-      onAdFailedToShowFullScreenContent: (a, error) {
-        a.dispose();
-        debugPrint('download gate show failed: ${error.message}');
-        if (!done.isCompleted) done.complete(false);
-        unawaited(preloadDownloadAd());
-      },
-    ));
     try {
       await ad.showAndTrack(
         onUserEarnedReward: (_, _) => earned = true,
@@ -394,8 +367,9 @@ class Ads extends ChangeNotifier {
       debugPrint('download gate threw: $e');
       return false;
     }
-    return done.future.timeout(const Duration(minutes: 3),
-        onTimeout: () => earned);
+    ad.dispose();
+    unawaited(preloadDownloadAd());
+    return earned;
   }
 
   // ---- app open ----------------------------------------------------------
@@ -447,20 +421,6 @@ class Ads extends ChangeNotifier {
     _appOpen = null;
     await prefs.setInt('adAppOpenShownMs', now);
 
-    final done = Completer<void>();
-    ad.setTrackingFullScreenContentCallback(FullScreenContentCallback(
-      onAdDismissedFullScreenContent: (a) {
-        a.dispose();
-        if (!done.isCompleted) done.complete();
-        unawaited(preloadAppOpen());
-      },
-      onAdFailedToShowFullScreenContent: (a, error) {
-        a.dispose();
-        debugPrint('app-open show failed: ${error.message}');
-        if (!done.isCompleted) done.complete();
-        unawaited(preloadAppOpen());
-      },
-    ));
     try {
       await ad.showAndTrack();
     } catch (e) {
@@ -468,8 +428,8 @@ class Ads extends ChangeNotifier {
       debugPrint('app-open threw: $e');
       return;
     }
-    await done.future.timeout(const Duration(minutes: 2),
-        onTimeout: () {});
+    ad.dispose();
+    unawaited(preloadAppOpen());
   }
 }
 
