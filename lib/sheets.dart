@@ -19,7 +19,7 @@ import 'models.dart';
 import 'player.dart';
 import 'top_toast.dart';
 import 'ads.dart';
-import 'receipt_email.dart';
+import 'receipt_pdf.dart';
 
 // ---------------------------------------------------------------------------
 // Add reel / extraction intake
@@ -1345,20 +1345,10 @@ class _PaywallSheetState extends State<_PaywallSheet> {
       final report = await Billing.I.purchasePlan(plan);
       if (!mounted) return;
       if (report.ok) {
-        // Send receipt email (Resend-backed endpoint). Never blocks the purchase.
-        final e = Entitlements.I;
-        if (ReceiptEmail.I.configured) {
-          final receipt = PurchaseReceipt(
-            productId: e.productId ?? plan,
-            priceString: Billing.I.planView(plan)?.priceString ?? '',
-            purchasedAt: DateTime.now(),
-            customerEmail: ReceiptEmail.I.email!,
-            expirationDate: e.subscriptionEndsAt,
-          );
-          unawaited(ReceiptEmail.I.send(receipt));
-        }
         Navigator.pop(context);
-        if (context.mounted) showTopToast(context, 'Welcome to Pro · no ads');
+        if (context.mounted) {
+          showTopToast(context, 'Welcome to Pro · no ads');
+        }
       } else if (report.outcome == PurchaseOutcome.pending) {
         Navigator.pop(context);
         if (context.mounted) showTopToast(context, report.message ?? 'Pending');
@@ -1391,9 +1381,103 @@ class _PaywallSheetState extends State<_PaywallSheet> {
   }
 
   Future<void> _manage() async {
-    await launchUrl(Uri.parse(Billing.manageUrl),
-        mode: LaunchMode.externalApplication);
+    await launchUrl(
+      Uri.parse(Billing.manageUrlFor(Entitlements.I.productId)),
+      mode: LaunchMode.externalApplication,
+    );
   }
+
+  Future<void> _downloadReceipt() async {
+    if (busy) return;
+    final e = Entitlements.I;
+    if (!e.purchased && e.purchaseHistory.isEmpty) {
+      showTopToast(context, 'No purchase to summarise yet', error: true);
+      return;
+    }
+    setState(() => busy = true);
+    try {
+      final saved = await ReceiptPdf.saveToDevice();
+      if (!mounted) return;
+      if (saved) showTopToast(context, 'Purchase summary saved');
+    } catch (err) {
+      debugPrint('receipt: save failed $err');
+      if (mounted) {
+        showTopToast(context, 'Could not create the PDF', error: true);
+      }
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  /// Cancellation always happens in Google Play (the merchant of record).
+  /// This sheet only explains the consequence and hands off. Test Store
+  /// purchases never existed in Play, so they get a local off-switch instead.
+  Future<void> _cancelSubscription() async {
+    final e = Entitlements.I;
+    final testStore = e.storeLabel == 'Test Store';
+    final end = e.subscriptionEndsAt;
+    final when = end == null ? 'the end of the paid period' : _longDate(end);
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        title: Text(testStore ? 'End test Pro?' : 'Cancel ReelTunes Pro?'),
+        content: Text(testStore
+            ? 'This is a RevenueCat Test Store purchase, so Google Play has no '
+                'subscription to cancel. Ending it here returns the app to the '
+                'Free plan immediately. No money was ever charged.'
+            : 'Cancelling stops the next payment. You keep Pro until $when; '
+                'after that the app returns to the Free plan. Your audios, '
+                'playlists and files are never deleted. Google Play handles '
+                'the cancellation and any refund request — ReelTunes cannot '
+                'cancel or refund a Play subscription.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx, false),
+            child: const Text('Keep Pro'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogCtx, true),
+            child: Text(testStore ? 'End test Pro' : 'Open Google Play'),
+          ),
+        ],
+      ),
+    );
+    if (go != true || !mounted) return;
+    if (testStore) {
+      if (kDebugMode) {
+        await Entitlements.I.setPurchased(false);
+        if (!mounted) return;
+        Navigator.pop(context);
+        if (context.mounted) showTopToast(context, 'Test Pro ended');
+      } else if (context.mounted) {
+        showTopToast(context, 'Uninstall and reinstall to reset the test',
+            error: true);
+      }
+      return;
+    }
+    await launchUrl(
+      Uri.parse(Billing.manageUrlFor(e.productId)),
+      mode: LaunchMode.externalApplication,
+    );
+  }
+
+  static const _monthsLong = [
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+
+  static String _longDate(DateTime d) =>
+      '${d.day} ${_monthsLong[d.month - 1]} ${d.year}';
 
   @override
   Widget build(BuildContext context) {
@@ -1447,7 +1531,9 @@ class _PaywallSheetState extends State<_PaywallSheet> {
                   const SizedBox(height: 4),
                   Text(
                     e.willRenew
-                        ? 'Renews automatically through Google Play.'
+                        ? 'Renews automatically through Google Play'
+                            '${e.subscriptionEndsAt != null ? ' on ${_longDate(e.subscriptionEndsAt!)}' : ''}'
+                            '${e.receiptPrice.isNotEmpty ? ' · ${e.receiptPrice}' : ''}.'
                         : 'No renewal scheduled. Pro stays until the date above.',
                     textAlign: TextAlign.center,
                     style: text.bodySmall
@@ -1513,12 +1599,17 @@ class _PaywallSheetState extends State<_PaywallSheet> {
               ),
             ],
             const SizedBox(height: 14),
-            if (alreadyPro)
+            if (e.purchased) ...[
               FilledButton(
-                onPressed: _manage,
+                onPressed: busy ? null : _manage,
                 child: const Text('Manage subscription'),
-              )
-            else
+              ),
+              const SizedBox(height: 6),
+              OutlinedButton(
+                onPressed: busy ? null : _cancelSubscription,
+                child: const Text('Cancel subscription'),
+              ),
+            ] else if (!alreadyPro)
               FilledButton(
                 onPressed: busy ? null : _buy,
                 child: busy
@@ -1528,6 +1619,12 @@ class _PaywallSheetState extends State<_PaywallSheet> {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Text('Continue'),
+              ),
+            if (e.purchased || e.purchaseHistory.isNotEmpty)
+              TextButton.icon(
+                onPressed: busy ? null : _downloadReceipt,
+                icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
+                label: const Text('Download purchase summary'),
               ),
             if (!alreadyPro && Billing.I.configured)
               TextButton(

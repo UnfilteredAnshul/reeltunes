@@ -23,6 +23,9 @@ dependencies:
   # state in one place; the SDK key is injected at build time (see lib/billing.dart).
   purchases_flutter: ^11.0.0
   google_mobile_ads: ^9.2.0
+  # Local purchase-summary PDF. Generated on the device, saved through the
+  # system file picker; nothing is emailed or uploaded.
+  pdf: ^3.11.3
 
 dev_dependencies:
   flutter_test:

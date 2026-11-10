@@ -16,15 +16,17 @@ import 'legal.dart';
 import 'library_sync.dart';
 import 'models.dart';
 import 'promo.dart';
+import 'receipt_pdf.dart';
 import 'redeem_sheet.dart';
 import 'shop_sheet.dart';
 import 'sheets.dart';
 import 'top_toast.dart';
-import 'receipt_email.dart';
 import 'notification_service.dart';
 
 /// Where bug reports and suggestions go (mail app handoff, no server).
 const feedbackEmail = 'contact.unfiltered.anshul@gmail.com';
+
+String _shortDate(DateTime d) => '${d.day}/${d.month}/${d.year}';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -189,6 +191,42 @@ class SettingsScreen extends StatelessWidget {
                             ),
                       onTap: () => showPaywallSheet(context),
                     ),
+                    if (e.purchased || e.purchaseHistory.isNotEmpty)
+                      ListTile(
+                        leading: const Icon(Icons.receipt_long_outlined),
+                        title: const Text('Download purchase summary'),
+                        subtitle: Text(e.purchaseDate != null
+                            ? 'PDF · last purchase ${_shortDate(e.purchaseDate!)} · saved on this device'
+                            : 'PDF · saved on this device'),
+                        onTap: () async {
+                          try {
+                            final saved = await ReceiptPdf.saveToDevice();
+                            if (saved && context.mounted) {
+                              showTopToast(
+                                  context, 'Purchase summary saved');
+                            }
+                          } catch (err) {
+                            debugPrint('receipt: save failed $err');
+                            if (context.mounted) {
+                              showTopToast(
+                                  context, 'Could not create the PDF',
+                                  error: true);
+                            }
+                          }
+                        },
+                      ),
+                    if (e.purchased && e.storeLabel != 'Test Store')
+                      ListTile(
+                        leading: const Icon(Icons.cancel_outlined),
+                        title: const Text('Cancel subscription'),
+                        subtitle: const Text(
+                            'Opens Google Play · Pro stays until the paid period ends'),
+                        trailing: const Icon(Icons.open_in_new, size: 18),
+                        onTap: () => launchUrl(
+                          Uri.parse(Billing.manageUrlFor(e.productId)),
+                          mode: LaunchMode.externalApplication,
+                        ),
+                      ),
                     ListTile(
                       leading: const Icon(Icons.confirmation_number_outlined),
                       title: const Text('Redeem a code'),
@@ -429,15 +467,64 @@ class _NotificationSettingsTile extends StatefulWidget {
 }
 
 class _NotificationSettingsTileState extends State<_NotificationSettingsTile> {
+  Future<void> _openExactAlarmSettings() async {
+    await NotificationService.I.openExactAlarmSettings();
+    // The user may come back from system settings after a moment; re-read the
+    // grant so the row updates without restarting the app.
+    await Future.delayed(const Duration(milliseconds: 800));
+    if (!mounted) return;
+    await NotificationService.I.refreshExactAlarmStatus();
+    if (mounted) setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) {
     final n = NotificationService.I;
     return Column(children: [
       SwitchListTile(
+        title: const Text('Subscription reminders'),
+        subtitle: const Text(
+            '3 days, 1 day and at the renewal minute. Scheduled on this phone.'),
+        value: n.subscriptionRemindersEnabled,
+        onChanged: (v) async {
+          await n.setSubscriptionReminders(v);
+          if (mounted) setState(() {});
+        },
+      ),
+      if (n.subscriptionRemindersEnabled)
+        ListTile(
+          leading: Icon(n.exactAlarmsAllowed ? Icons.alarm_on : Icons.alarm),
+          title: const Text('Exact reminders'),
+          subtitle: Text(n.exactAlarmsAllowed
+              ? 'Android allows exact alarms, so reminders arrive on time.'
+              : 'Exact alarms are not allowed. Reminders still arrive, but '
+                  'Android may delay them a few minutes.'),
+          trailing: n.exactAlarmsAllowed
+              ? const Icon(Icons.check_circle_outline, size: 18)
+              : TextButton(
+                  onPressed: _openExactAlarmSettings,
+                  child: const Text('Allow'),
+                ),
+          onTap: n.exactAlarmsAllowed ? null : _openExactAlarmSettings,
+        ),
+      if (kDebugMode && n.subscriptionRemindersEnabled)
+        ListTile(
+          leading: const Icon(Icons.notifications_active_outlined),
+          title: const Text('Send a test reminder'),
+          subtitle: const Text('Posts a sample Pro renewal notification now'),
+          onTap: () async {
+            await n.sendTestReminder();
+            if (context.mounted) showTopToast(context, 'Test reminder sent');
+          },
+        ),
+      SwitchListTile(
         title: const Text('Vibrate on alerts'),
         subtitle: const Text('Perk and Pro expiry notifications vibrate.'),
         value: n.vibrate,
-        onChanged: (v) => n.setVibrate(v),
+        onChanged: (v) async {
+          await n.setVibrate(v);
+          if (mounted) setState(() {});
+        },
       ),
       ListTile(
         leading: const Icon(Icons.volume_up),
@@ -506,12 +593,10 @@ class _DebugTierSection extends StatefulWidget {
 
 class _DebugTierSectionState extends State<_DebugTierSection> {
   final _coinCtrl = TextEditingController();
-  final _emailCtrl = TextEditingController();
 
   @override
   void dispose() {
     _coinCtrl.dispose();
-    _emailCtrl.dispose();
     super.dispose();
   }
 
@@ -558,18 +643,6 @@ class _DebugTierSectionState extends State<_DebugTierSection> {
     _coinCtrl.clear();
     if (!mounted) return;
     showTopToast(context, 'Coins set to $v');
-  }
-
-  Future<void> _setEmail() async {
-    final email = _emailCtrl.text.trim();
-    if (email.isEmpty || !email.contains('@')) {
-      showTopToast(context, 'Enter a valid email address', error: true);
-      return;
-    }
-    ReceiptEmail.I.setEmail(email);
-    _emailCtrl.clear();
-    if (!mounted) return;
-    showTopToast(context, 'Receipt email saved');
   }
 
   @override
@@ -679,31 +752,6 @@ class _DebugTierSectionState extends State<_DebugTierSection> {
             onPressed: _setCustomCoins,
             icon: const Icon(Icons.done),
             label: const Text('Set'),
-          ),
-        ),
-        const Divider(height: 1),
-        // Email for receipt delivery (Resend-backed endpoint).
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-          child: TextField(
-            controller: _emailCtrl,
-            keyboardType: TextInputType.emailAddress,
-            decoration: const InputDecoration(
-              labelText: 'Receipt email (debug)',
-              border: OutlineInputBorder(),
-              prefixIcon: Icon(Icons.email),
-              helperText: 'Enter your email to receive the Pro purchase receipt.',
-            ),
-            onSubmitted: (_) => _setEmail(),
-          ),
-        ),
-        const SizedBox(height: 4),
-        Align(
-          alignment: Alignment.centerRight,
-          child: TextButton.icon(
-            onPressed: _setEmail,
-            icon: const Icon(Icons.done),
-            label: const Text('Save'),
           ),
         ),
         const Divider(height: 1),

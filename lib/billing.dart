@@ -75,6 +75,19 @@ class Billing {
   static const String manageUrl =
       'https://play.google.com/store/account/subscriptions';
 
+  static const String packageName = 'com.buildwithanshul.reeltunes';
+
+  /// Deep link to the user's Play subscriptions, pre-selecting this product
+  /// when Play accepts the sku. The base plan suffix is stripped because Play
+  /// expects the product id only.
+  static String manageUrlFor(String? productId) {
+    if (productId == null || productId.isEmpty) return manageUrl;
+    final sku = productId.split(':').first;
+    return Uri.parse(manageUrl)
+        .replace(queryParameters: {'sku': sku, 'package': packageName})
+        .toString();
+  }
+
   bool _configured = false;
 
   /// True when a key was supplied *and* the SDK accepted it. Gates every store
@@ -292,15 +305,32 @@ class Billing {
   /// One place where a CustomerInfo becomes app state.
   void _apply(CustomerInfo info) {
     final ent = info.entitlements.active[entitlementId];
+    final testStore = ent?.store == Store.testStore;
     Entitlements.I.setStoreEntitlement(
       active: ent != null,
       trial: ent?.periodType == PeriodType.trial,
       willRenew: ent?.willRenew ?? false,
       endsAt: _parseDate(ent?.expirationDate),
       productId: ent?.productIdentifier,
+      purchasedAt: _parseDate(ent?.latestPurchaseDate),
+      originalPurchaseAt: _parseDate(ent?.originalPurchaseDate),
+      sandbox: ent?.isSandbox == true || testStore,
+      priceString: _priceForProduct(ent?.productIdentifier),
+      storeLabel: testStore ? 'Test Store' : 'Google Play',
     );
     // Refresh Pro expiry notifications when the entitlement changes.
     unawaited(NotificationService.I.refreshProNotifications());
+  }
+
+  /// The price Play showed for a product, when the offering is already loaded.
+  /// Restores from a cold start may not have it; the receipt then says "price
+  /// shown in Google Play".
+  String? _priceForProduct(String? productId) {
+    if (productId == null) return null;
+    final id = productId.toLowerCase();
+    final plan =
+        id.contains('year') || id.contains('annual') ? 'annual' : 'monthly';
+    return planView(plan)?.priceString;
   }
 
   static DateTime? _parseDate(String? iso) =>

@@ -355,19 +355,19 @@ Codes, creator programs and the admin dashboard are specified in
 3. **RevenueCat dashboard:** create entitlement `pro`, offering `default`,
    packages `$rc_monthly` / `$rc_annual`, link the Play products, upload the
    Play service-account JSON.
-4. **Resend account:** create an API key, verify a sending domain.
-5. **Cloudflare Worker:** deploy `worker/receipt-email/` (`wrangler deploy`,
-   `wrangler secret put RESEND_API_KEY`), note the worker URL.
+4. No email provider is needed. Purchases produce a local **Download purchase
+   summary** PDF; Google Play remains the merchant of record and sends the
+   official receipt.
 
 ### 12.2 Build for testing
 
 ```powershell
-flutter build apk --debug --dart-define RC_ANDROID_KEY=goog_… --dart-define RECEIPT_EMAIL_ENDPOINT=https://<your-worker>.workers.dev
+flutter build apk --debug --dart-define RC_ANDROID_KEY=goog_…
 ```
 
-Install on the device. Open Settings → Debug tiers → **Receipt email (debug)**
-and enter your email address. The receipt endpoint URL comes from the build
-define, so it's set once per build.
+Install on the device. After a purchase, open the Pro sheet or
+Settings → Account → **Download purchase summary** and save the PDF. No email
+address is entered or stored.
 
 ### 12.3 Test purchase flow
 

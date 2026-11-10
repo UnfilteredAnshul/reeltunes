@@ -58,6 +58,56 @@ class MainActivity : AudioServiceActivity() {
                     else -> result.notImplemented()
                 }
             }
+        // Subscription reminders: AlarmManager + a local notification. No
+        // network, no Firebase, no exact-alarm permission required to fall
+        // back to an inexact alarm.
+        ReminderScheduler.ensureChannel(this)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, REMINDER_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "schedule" -> {
+                        val raw = call.argument<Any?>("reminders")
+                        val items = (raw as? List<*>)?.mapNotNull { entry ->
+                            val map = entry as? Map<*, *> ?: return@mapNotNull null
+                            val id = (map["id"] as? Number)?.toInt()
+                                ?: return@mapNotNull null
+                            val at = (map["atMs"] as? Number)?.toLong()
+                                ?: return@mapNotNull null
+                            ReminderScheduler.Reminder(
+                                id = id,
+                                atMs = at,
+                                title = map["title"]?.toString() ?: "ReelTunes Pro",
+                                body = map["body"]?.toString() ?: "",
+                                vibrate = map["vibrate"] != false
+                            )
+                        } ?: emptyList()
+                        ReminderScheduler.replace(this, items)
+                        result.success(true)
+                    }
+                    "cancel" -> {
+                        ReminderScheduler.cancelAll(this)
+                        result.success(true)
+                    }
+                    "exactAlarmStatus" ->
+                        result.success(ReminderScheduler.canScheduleExact(this))
+                    "openExactAlarmSettings" -> {
+                        ReminderScheduler.requestExactPermission(this)
+                        result.success(true)
+                    }
+                    "test" -> {
+                        ReminderScheduler.postNow(
+                            this,
+                            7399,
+                            call.argument<String>("title") ?: "ReelTunes Pro",
+                            call.argument<String>("body")
+                                ?: "This is what a subscription reminder looks like.",
+                            call.argument<Boolean>("vibrate") ?: true
+                        )
+                        result.success(true)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
     }
 
     private fun launchPicker(result: MethodChannel.Result, folder: Boolean) {
@@ -273,6 +323,7 @@ private val MEDIA_EXTENSIONS = setOf(
     "mp4", "mkv", "webm", "avi", "m4v", "mov", "3gp"
 )
 private const val MEDIA_CHANNEL = "com.buildwithanshul.reeltunes/media"
+private const val REMINDER_CHANNEL = "com.buildwithanshul.reeltunes/reminders"
 private const val REQUEST_FILES = 4312
 private const val REQUEST_FOLDER = 4313
 private const val REQUEST_NOTIFICATIONS = 4315

@@ -16,6 +16,9 @@ Last updated: 2026-11-08. Everything below was verified on the Realme (debug bui
 | How do testers simulate a purchase? | Sideload the debug APK with the test key, open the paywall, tap **Continue**, then **Test valid purchase**. No Google account, no money, Pro unlocks. |
 | Is that a real Play purchase? | No. It is RevenueCat's Test Store: a sandbox subscriber, not Google Play billing. Real Play billing needs the production `goog_…` key plus the service account JSON. |
 | Does AdMob need a service account? | No. The service account is only for **Play Console → RevenueCat** purchase validation. AdMob uses its own account, app ID and ad unit IDs. |
+| Can users get a receipt? | Yes. **Download purchase summary** creates a local PDF. Google Play is still the merchant of record and issues the official receipt/invoice. |
+| How does a user cancel? | Settings → Account → **Cancel subscription**, or the Pro sheet. Both open Google Play's subscription page. |
+| Will users be reminded before renewal? | Yes, if they leave reminders on: 3 days, 1 day and the renewal minute. Local alarms only, no email. |
 
 ---
 
@@ -368,14 +371,34 @@ Use this when you want to test **live** units without generating invalid traffic
 
 ---
 
-## 5. Recommended sequence
+## 5. Purchase summary, cancellation and reminders (what changed)
+
+- **Download purchase summary** — Settings → Account, and the Pro sheet. A PDF is generated on the device with `pdf` and saved through Android's file picker. It is labelled "Purchase summary", says Google Play is merchant of record, and says it is not a tax invoice. No email, no Resend, no Worker.
+- **Cancellation** — Settings → Account → Cancel subscription, or the Pro sheet → Cancel subscription. Both open Google Play's subscription page. The confirmation says Pro lasts until the end of the paid period and refunds are handled by Play. Test Store purchases (debug APK only) get "End test Pro" instead, because Play has nothing to cancel.
+- **Reminders** — 3 days before, 1 day before, and at the renewal minute. Auto-renew reminders state the amount Play will charge. Ending reminders state that the app returns to Free and nothing is deleted. All local; no email, no server.
+- **Exact timing** — Settings → Notifications → Exact reminders. Android 12+ may need the user to allow exact alarms. Without it the alarm still fires, just possibly a few minutes late.
+
+## 6. Play Console declarations after this update
+
+| Area | Change? | Action |
+|---|---|---|
+| Data safety | **No** | No new collection. The PDF, purchase history and reminder schedule are local. No email is collected. Keep the existing Purchase history + Device/other IDs answers. |
+| Ads / AD_ID | **No** | AdMob unchanged. |
+| Content rating | **No** | Still online content, ads, digital purchases. |
+| Target audience | **No** | Not child-directed. |
+| Notifications permission | Already declared | `POST_NOTIFICATIONS` was already used by the media player. Reminders reuse it. |
+| Exact alarms | **New permission** | `SCHEDULE_EXACT_ALARM` is in the manifest. There is no Data safety form for it, but Play policy expects exact alarms to be core user-facing functionality. Subscription reminders are borderline. If review objects, remove the permission from `AndroidManifest.xml` and keep the inexact fallback in `ReminderScheduler.kt`. Exact-minute delivery will become approximate. |
+| Version code | **Yes** | Bump `version: 0.0.2+N` in `pubspec.yaml` for every upload. Renaming an AAB does nothing. |
+| Store listing / receipts | No | Do not call the PDF a tax invoice or a Google receipt. |
+
+## 7. Recommended sequence
 
 1. **Now**: keep the v6 AAB (store disabled) for the Play internal test. Testers who want to see Pro use the debug APK + Test Store (section 2).
 2. **When Play products are ready**: create the service account, grant Play permissions, upload the JSON to RevenueCat, create `monthly`/`yearly` subscriptions, map the entitlement and offering (section 3).
 3. **Then**: build with the `goog_…` key, upload a bumped versionCode, add license testers, and run the real flow with test cards.
 4. **Ads, independent of billing**: publish the UMP messages and add a test device (section 4). Test ads stay on for every non-production build.
 
-## 6. Do-not-do list
+## 8. Do-not-do list
 
 - Do not build a release/AAB with `RC_ANDROID_KEY=test_…`; the app closes by design.
 - Do not ship sample ad units or live units to testers without `ADMOB_TEST_ADS=true`.

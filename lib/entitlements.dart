@@ -12,12 +12,14 @@
 //     the cap only applies to what is imported next.
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'coins.dart';
 import 'notification_service.dart';
+import 'purchase_record.dart';
 
 class Entitlements extends ChangeNotifier {
   Entitlements._();
@@ -36,6 +38,12 @@ class Entitlements extends ChangeNotifier {
   bool _willRenew = false;
   DateTime? _subscriptionEndsAt;
   String? _productId;
+  DateTime? _purchaseDate;
+  DateTime? _originalPurchaseDate;
+  bool _sandbox = false;
+  String? _priceString;
+  String _storeLabel = 'Google Play';
+  List<PurchaseRecord> _purchaseHistory = const [];
   bool _debugPro = false;
   /// Debug only: force the Free plan even when a purchase, code grant or the
   /// trial would otherwise make the app Pro. Without this, "Force Pro off" and
@@ -69,6 +77,18 @@ class Entitlements extends ChangeNotifier {
       _subscriptionEndsAt = DateTime.fromMillisecondsSinceEpoch(endMs);
     }
     _productId = prefs.getString('proProductId');
+    final purchaseMs = prefs.getInt('proPurchasedAtMs');
+    if (purchaseMs != null && purchaseMs > 0) {
+      _purchaseDate = DateTime.fromMillisecondsSinceEpoch(purchaseMs);
+    }
+    final originalMs = prefs.getInt('proOriginalPurchaseMs');
+    if (originalMs != null && originalMs > 0) {
+      _originalPurchaseDate = DateTime.fromMillisecondsSinceEpoch(originalMs);
+    }
+    _sandbox = prefs.getBool('proSandbox') ?? false;
+    _priceString = prefs.getString('proPriceString');
+    _storeLabel = prefs.getString('proStoreLabel') ?? 'Google Play';
+    _purchaseHistory = _decodeHistory(prefs.getString('purchaseHistory'));
     _debugPro = prefs.getBool('debugPro') ?? false;
     _debugFree = prefs.getBool('debugFree') ?? false;
     _grantLifetime = prefs.getBool('grantLifetime') ?? false;
@@ -181,6 +201,29 @@ class Entitlements extends ChangeNotifier {
 
   String? get productId => _productId;
 
+  /// When Play last charged for the active subscription (or when the trial
+  /// started). Null for debug/code Pro.
+  DateTime? get purchaseDate => purchased ? _purchaseDate : null;
+
+  /// First purchase of the subscription, across renewals.
+  DateTime? get originalPurchaseDate =>
+      purchased ? _originalPurchaseDate : null;
+
+  /// True for the RevenueCat Test Store or a Play licence tester.
+  bool get sandboxPurchase => purchased && _sandbox;
+
+  /// 'Google Play' or 'Test Store', for the receipt wording.
+  String get storeLabel => _storeLabel;
+
+  /// Human plan name derived from the store product id.
+  String get planLabel => PurchaseRecord.planFromProduct(_productId);
+
+  /// Price string captured at purchase time; may be empty after a restore.
+  String get receiptPrice => _priceString ?? '';
+
+  /// Newest first. Device-local, capped at 25 entries, wiped on uninstall.
+  List<PurchaseRecord> get purchaseHistory => _purchaseHistory;
+
   /// True while a redeemed code is still paying for Pro.
   bool get codeGrantActive {
     if (_grantLifetime) return true;
@@ -274,6 +317,11 @@ class Entitlements extends ChangeNotifier {
     bool willRenew = false,
     DateTime? endsAt,
     String? productId,
+    DateTime? purchasedAt,
+    DateTime? originalPurchaseAt,
+    bool sandbox = false,
+    String? priceString,
+    String? storeLabel,
   }) async {
     final wasPro = purchased;
     _purchased = active;
@@ -281,12 +329,24 @@ class Entitlements extends ChangeNotifier {
     _willRenew = active && willRenew;
     _subscriptionEndsAt = active ? endsAt : null;
     _productId = active ? productId : null;
+    _purchaseDate = active ? purchasedAt : null;
+    _originalPurchaseDate = active ? originalPurchaseAt : null;
+    _sandbox = active && sandbox;
+    if (active && priceString != null && priceString.isNotEmpty) {
+      _priceString = priceString;
+    }
+    if (!active) _priceString = null;
+    if (storeLabel != null && storeLabel.isNotEmpty) {
+      _storeLabel = storeLabel;
+    }
 
     final p = _prefs;
     if (p != null) {
       await p.setBool('proPurchased', _purchased);
       await p.setBool('proTrial', _billingTrial);
       await p.setBool('proWillRenew', _willRenew);
+      await p.setBool('proSandbox', _sandbox);
+      await p.setString('proStoreLabel', _storeLabel);
       if (_subscriptionEndsAt == null) {
         await p.remove('proEndsMs');
       } else {
@@ -298,6 +358,38 @@ class Entitlements extends ChangeNotifier {
       } else {
         await p.setString('proProductId', _productId!);
       }
+      if (_purchaseDate == null) {
+        await p.remove('proPurchasedAtMs');
+      } else {
+        await p.setInt(
+            'proPurchasedAtMs', _purchaseDate!.millisecondsSinceEpoch);
+      }
+      if (_originalPurchaseDate == null) {
+        await p.remove('proOriginalPurchaseMs');
+      } else {
+        await p.setInt('proOriginalPurchaseMs',
+            _originalPurchaseDate!.millisecondsSinceEpoch);
+      }
+      if (_priceString == null) {
+        await p.remove('proPriceString');
+      } else {
+        await p.setString('proPriceString', _priceString!);
+      }
+    }
+    if (active &&
+        _productId != null &&
+        _purchaseDate != null &&
+        _purchaseDate!.millisecondsSinceEpoch > 0) {
+      await _rememberPurchase(PurchaseRecord(
+        productId: _productId!,
+        planLabel: planLabel,
+        priceString: _priceString ?? '',
+        purchasedAt: _purchaseDate!,
+        expiresAt: _subscriptionEndsAt,
+        willRenew: _willRenew,
+        sandbox: _sandbox,
+        storeLabel: _storeLabel,
+      ));
     }
     // A fresh subscription retires the trial-end nudges: there is nothing left
     // to nag about, and a later lapse should not replay an old reminder.
@@ -306,6 +398,37 @@ class Entitlements extends ChangeNotifier {
       await p?.remove('reminderShown1');
     }
     _changedWithNotifs();
+  }
+
+  /// Keeps one device-local record per store purchase period. Renewals move
+  /// `latestPurchaseDate`, so they naturally add a new row.
+  Future<void> _rememberPurchase(PurchaseRecord record) async {
+    final key = record.purchasedAt.millisecondsSinceEpoch;
+    final exists = _purchaseHistory.any((r) =>
+        r.productId == record.productId &&
+        r.purchasedAt.millisecondsSinceEpoch == key);
+    if (exists) return;
+    final list = <PurchaseRecord>[record, ..._purchaseHistory];
+    if (list.length > 25) list.removeRange(25, list.length);
+    _purchaseHistory = List.unmodifiable(list);
+    await _prefs?.setString(
+      'purchaseHistory',
+      jsonEncode(list.map((r) => r.toJson()).toList()),
+    );
+  }
+
+  static List<PurchaseRecord> _decodeHistory(String? raw) {
+    if (raw == null || raw.isEmpty) return const [];
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return const [];
+      return List.unmodifiable(decoded
+          .map(PurchaseRecord.fromJson)
+          .whereType<PurchaseRecord>()
+          .toList());
+    } catch (_) {
+      return const [];
+    }
   }
 
   /// Writes/extends a code grant. [until] is ignored for a lifetime grant.

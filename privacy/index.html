@@ -78,7 +78,7 @@
   </header>
 
   <h1>Privacy Policy</h1>
-  <p class="meta">Effective 7 November 2026. Applies to the ReelTunes Android app.</p>
+  <p class="meta">Effective 10 November 2026. Applies to the ReelTunes Android app.</p>
 
   <div class="summary">
     <p><strong>Short version</strong>
@@ -110,6 +110,8 @@
     <li>Audio and video files you download or import, and any copy saved to your folder</li>
     <li>Library entries: titles, durations, sources and playlists</li>
     <li>App settings: theme, sort order, loop range, notification preferences, coin balance and earned perks</li>
+    <li>Purchase history and the purchase-summary PDF, when you choose to save one</li>
+    <li>The times of your subscription reminders, kept only so Android can reschedule them after a restart</li>
     <li>The permission token for your audios folder, so the app can reopen it after a restart</li>
   </ul>
   <p>The audio extraction runs entirely on the phone. No file is sent to a
@@ -122,13 +124,31 @@
   <h2>3. Data we do collect</h2>
 
   <h3>Purchases</h3>
-  <p>Pro subscriptions are sold through Google Play. Payments are processed by
-    Google; we never see your card details. Google emails a receipt for every
-    purchase, so ReelTunes never asks for your email address. RevenueCat, Inc.
-    is used to validate purchases and keep your Pro status in sync. RevenueCat
-    receives an anonymous app user ID, the products you bought, purchase and
-    renewal dates, your country, platform and app version. It does not receive
-    your name, email or payment details.</p>
+  <p>Pro subscriptions are sold through Google Play. Google is the merchant of
+    record: it processes the payment, issues the official receipt and invoice,
+    and handles cancellations and refunds. We never see your card details.
+    ReelTunes never asks for your email address. RevenueCat, Inc. is used to
+    validate purchases and keep your Pro status in sync. RevenueCat receives an
+    anonymous app user ID, the products you bought, purchase and renewal dates,
+    your country, platform and app version. It does not receive your name,
+    email or payment details.</p>
+  <p>ReelTunes can create a purchase summary as a PDF on your device, using the
+    plan, amount and dates already cached in the app. When you tap download,
+    Android's system file picker asks where to save it. The PDF is never
+    uploaded, emailed or sent to RevenueCat. It is a summary, not a tax invoice;
+    Google Play's own receipt remains the official document.</p>
+  <p>A short purchase history (plan, amount, date, store) is kept only on this
+    device so the PDF and the Pro screen can show it. It is cleared when you
+    uninstall the app.</p>
+
+  <h3>Subscription reminders</h3>
+  <p>ReelTunes can remind you three days before Pro ends, one day before, and at
+    the renewal minute. These reminders are scheduled locally with Android's
+    alarm and notification services. The plan, price and end date needed for
+    the reminder stay on your device; no reminder data is sent to us, to
+    RevenueCat or to Google. You can turn reminders off in Settings. Exact
+    timing on Android 12 and later needs the exact-alarm permission; without
+    it the reminder still arrives, but Android may delay it a few minutes.</p>
 
   <h3>Advertising (free version)</h3>
   <p>The free version shows ads through Google AdMob. Google may collect your
@@ -154,7 +174,8 @@
 
   <h2>5. Permissions the app asks for</h2>
   <ul>
-    <li><strong>Notifications:</strong> to show the playback controls in the notification shade and on the lock screen. Playback works without it.</li>
+    <li><strong>Notifications:</strong> to show the playback controls in the notification shade and on the lock screen, and to deliver optional subscription reminders. Playback works without it.</li>
+    <li><strong>Exact alarms (Android 12+):</strong> optional, requested only for the subscription reminder at the renewal minute. If you decline, reminders are still scheduled but may be delayed.</li>
     <li><strong>Internet:</strong> to download the media from the link you paste, and for ads and purchase verification. Without a connection, links cannot be downloaded; files already in your library play offline.</li>
     <li><strong>Foreground service (media playback):</strong> to keep audio playing when the app is in the background.</li>
     <li><strong>Folder access:</strong> granted by you through the Android folder picker, limited to the single folder you select. ReelTunes does not request broad storage permission.</li>
@@ -173,7 +194,8 @@
   <h2>7. Retention and deletion</h2>
   <ul>
     <li>Uninstalling ReelTunes deletes the app's library, settings and permissions from the device. Audio files remain in your own folder.</li>
-    <li>Purchase records are kept by Google Play and RevenueCat as required for billing, tax and fraud prevention.</li>
+    <li>Purchase records are kept by Google Play and RevenueCat as required for billing, tax and fraud prevention. The local purchase history and reminder schedule are deleted when the app is uninstalled.</li>
+    <li>A purchase-summary PDF you saved is yours; it remains in the location you chose until you delete it.</li>
     <li>To stop ad personalisation, use the consent options in Settings or reset your advertising ID in Android.</li>
   </ul>
 
@@ -207,7 +229,7 @@
 
   <hr>
   <footer>
-    <p>ReelTunes, Android app by Anshul Rajpal. Last updated 8 November 2026.
+    <p>ReelTunes, Android app by Anshul Rajpal. Last updated 10 November 2026.
       See also the <a href="/terms">Terms of Service</a>.</p>
   </footer>
 
