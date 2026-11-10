@@ -276,10 +276,10 @@ packages:
     dependency: "direct main"
     description:
       name: google_mobile_ads
-      sha256: "439e018d73b47565d1cf21410e893a8f46d5fb95110c41c266a6fb78449d7106"
+      sha256: "50549f6c945d7a445d53c04f34d025b1a1723fbd02719de9e67de432e2597f40"
       url: "https://pub.dev"
     source: hosted
-    version: "9.2.0"
+    version: "8.0.0"
   hooks:
     dependency: transitive
     description:
@@ -575,6 +575,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.2.1"
+  purchases_admob_flutter:
+    dependency: "direct main"
+    description:
+      name: purchases_admob_flutter
+      sha256: e8e8996453b61598ba764f367209813fd521b4d64966e7fc7a90056593030ab2
+      url: "https://pub.dev"
+    source: hosted
+    version: "11.0.0"
   purchases_flutter:
     dependency: "direct main"
     description:

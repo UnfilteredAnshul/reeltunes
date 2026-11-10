@@ -5,12 +5,18 @@
 // Identifiers live in `lib/ad_config.dart`. Live units are used by default;
 // `--dart-define=ADMOB_TEST_ADS=true` (or Settings → Debug tiers) switches to
 // Google's samples, which are safe to tap while testing.
+//
+// Ad events (loaded, displayed, opened, revenue, failed) are reported to
+// RevenueCat Charts through the RevenueCat AdMob adapter. This is free:
+// RevenueCat does not take a cut of ad revenue. Impression-level ad revenue
+// must be on and saved in the AdMob account for revenue events to arrive.
 
 import 'dart:async';
 
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
+import 'package:purchases_admob_flutter/purchases_admob_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'ad_config.dart';
@@ -136,10 +142,11 @@ class Ads extends ChangeNotifier {
     while (_playlistAds.length < _playlistTarget && !_playlistLoading) {
       _playlistLoading = true;
       try {
-        final ad = BannerAd(
+        final ad = RevenueCatAdMob.createBannerAd(
           adUnitId: AdConfig.playlistUnitId,
           size: AdSize.banner,
           request: const AdRequest(),
+          placement: 'playlist_banner',
           listener: BannerAdListener(
             onAdLoaded: (a) {
               final ba = a as BannerAd;
@@ -250,9 +257,10 @@ class Ads extends ChangeNotifier {
     if (!_ready || _rewarded != null || _rewardedLoading) return;
     _rewardedLoading = true;
     try {
-      await RewardedAd.load(
+      await RevenueCatAdMob.loadAndTrackRewardedAd(
         adUnitId: AdConfig.rewardedUnitId,
         request: const AdRequest(),
+        placement: 'coin_shop_rewarded',
         rewardedAdLoadCallback: RewardedAdLoadCallback(
           onAdLoaded: (ad) {
             _rewarded = ad;
@@ -288,7 +296,7 @@ class Ads extends ChangeNotifier {
 
     var earned = false;
     final done = Completer<bool>();
-    ad.fullScreenContentCallback = FullScreenContentCallback(
+    ad.setTrackingFullScreenContentCallback(FullScreenContentCallback(
       onAdDismissedFullScreenContent: (a) {
         a.dispose();
         if (!done.isCompleted) done.complete(earned);
@@ -300,9 +308,9 @@ class Ads extends ChangeNotifier {
         if (!done.isCompleted) done.complete(false);
         unawaited(preloadRewarded());
       },
-    );
+    ));
     try {
-      await ad.show(
+      await ad.showAndTrack(
         onUserEarnedReward: (_, _) => earned = true,
       );
     } catch (e) {
@@ -324,9 +332,10 @@ class Ads extends ChangeNotifier {
     if (!_ready || _downloadAd != null || _downloadLoading) return;
     _downloadLoading = true;
     try {
-      await RewardedAd.load(
+      await RevenueCatAdMob.loadAndTrackRewardedAd(
         adUnitId: AdConfig.downloadUnitId,
         request: const AdRequest(),
+        placement: 'download_gate_rewarded',
         rewardedAdLoadCallback: RewardedAdLoadCallback(
           onAdLoaded: (ad) {
             _downloadAd = ad;
@@ -364,7 +373,7 @@ class Ads extends ChangeNotifier {
 
     var earned = false;
     final done = Completer<bool>();
-    ad.fullScreenContentCallback = FullScreenContentCallback(
+    ad.setTrackingFullScreenContentCallback(FullScreenContentCallback(
       onAdDismissedFullScreenContent: (a) {
         a.dispose();
         if (!done.isCompleted) done.complete(earned);
@@ -376,9 +385,9 @@ class Ads extends ChangeNotifier {
         if (!done.isCompleted) done.complete(false);
         unawaited(preloadDownloadAd());
       },
-    );
+    ));
     try {
-      await ad.show(
+      await ad.showAndTrack(
         onUserEarnedReward: (_, _) => earned = true,
       );
     } catch (e) {
@@ -396,9 +405,10 @@ class Ads extends ChangeNotifier {
     if (!_ready || _appOpen != null || _appOpenLoading) return;
     _appOpenLoading = true;
     try {
-      await AppOpenAd.load(
+      await RevenueCatAdMob.loadAndTrackAppOpenAd(
         adUnitId: AdConfig.appOpenUnitId,
         request: const AdRequest(),
+        placement: 'app_open',
         adLoadCallback: AppOpenAdLoadCallback(
           onAdLoaded: (ad) {
             _appOpen = ad;
@@ -444,7 +454,7 @@ class Ads extends ChangeNotifier {
     await prefs.setInt('adAppOpenShownMs', now);
 
     final done = Completer<void>();
-    ad.fullScreenContentCallback = FullScreenContentCallback(
+    ad.setTrackingFullScreenContentCallback(FullScreenContentCallback(
       onAdDismissedFullScreenContent: (a) {
         a.dispose();
         if (!done.isCompleted) done.complete();
@@ -456,9 +466,9 @@ class Ads extends ChangeNotifier {
         if (!done.isCompleted) done.complete();
         unawaited(preloadAppOpen());
       },
-    );
+    ));
     try {
-      await ad.show();
+      await ad.showAndTrack();
     } catch (e) {
       ad.dispose();
       debugPrint('app-open threw: $e');
@@ -624,10 +634,11 @@ class _BannerFrameState extends State<_BannerFrame> {
         size = AdSize.banner;
       }
       if (!mounted) return;
-      final ad = BannerAd(
+      final ad = RevenueCatAdMob.createBannerAd(
         adUnitId: widget.unitId,
         size: size,
         request: const AdRequest(),
+        placement: widget.inline ? 'playlist_banner' : 'home_banner',
         listener: BannerAdListener(
           onAdLoaded: (ad) {
             if (!mounted) {
