@@ -435,6 +435,16 @@ async function patchCode(request, env, code) {
     sets.push('max_uses = ?');
     values.push(Math.max(0, Math.trunc(Number(body.maxUses) || 0)));
   }
+  if (body?.expiresAtMs !== undefined) {
+    const v = body.expiresAtMs === null || body.expiresAtMs === ''
+      ? null
+      : Math.trunc(Number(body.expiresAtMs));
+    if (v !== null && isNaN(v)) {
+      return { ok: false, message: 'Invalid expiry date' };
+    }
+    sets.push('expires_at = ?');
+    values.push(v);
+  }
   if (!sets.length) return { ok: false, message: 'Nothing to change' };
   values.push(code);
   const result = await env.DB.prepare(

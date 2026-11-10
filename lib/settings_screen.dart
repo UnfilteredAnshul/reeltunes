@@ -9,13 +9,11 @@ import 'package:url_launcher/url_launcher.dart';
 import 'ad_config.dart';
 import 'ads.dart';
 import 'billing.dart';
-import 'code_admin.dart';
 import 'coins.dart';
 import 'entitlements.dart';
 import 'legal.dart';
 import 'library_sync.dart';
 import 'models.dart';
-import 'promo.dart';
 import 'receipt_pdf.dart';
 import 'redeem_sheet.dart';
 import 'shop_sheet.dart';
@@ -238,20 +236,6 @@ class SettingsScreen extends StatelessWidget {
                         showTopToast(context, result.message);
                       },
                     ),
-                    if (kDebugMode || PromoEngine.I.adminUnlocked)
-                      ListTile(
-                        leading:
-                            const Icon(Icons.dashboard_customize_outlined),
-                        title: const Text('Code dashboard'),
-                        subtitle: const Text(
-                            'Create, revoke and inspect codes on this device'),
-                        trailing: const Icon(Icons.chevron_right),
-                        onTap: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (_) => const CodeDashboardScreen()),
-                        ),
-                      ),
                     // Only meaningful once the store is live and nothing is
                     // active: reinstalls and new phones land here.
                     if (!e.isPro && Billing.I.configured)
@@ -691,6 +675,15 @@ class _DebugTierSectionState extends State<_DebugTierSection> {
           onTap: () async {
             await e.resetTrial();
             if (context.mounted) showTopToast(context, 'Trial reset');
+          },
+        ),
+        ListTile(
+          leading: const Icon(Icons.remove_circle_outline),
+          title: const Text('Remove code effects'),
+          subtitle: const Text('Clears any code grant and returns to store state'),
+          onTap: () async {
+            await Entitlements.I.clearCodeGrant();
+            if (context.mounted) showTopToast(context, 'Code effects removed');
           },
         ),
         const Divider(height: 1),

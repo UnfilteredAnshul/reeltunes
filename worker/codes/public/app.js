@@ -10,8 +10,8 @@ const state = {
   stats: null,
   query: '',
   filter: '',
-  codeFilter: '',
   timer: null,
+  editingCode: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -23,6 +23,13 @@ function esc(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
+}
+
+function milestoneBadge(uses) {
+  if (uses >= 100) return '<span class="milestone">100+</span>';
+  if (uses >= 50) return '<span class="milestone">50</span>';
+  if (uses >= 25) return '<span class="milestone">25</span>';
+  return '';
 }
 
 async function api(path, options = {}) {
@@ -89,8 +96,7 @@ async function load(quiet = false) {
     const [stats, codes, redemptions] = await Promise.all([
       api('/api/admin/stats'),
       api('/api/admin/codes'),
-      api(`/api/admin/redemptions?limit=${state.codeFilter ? 200 : 50}` +
-        (state.codeFilter ? `&code=${encodeURIComponent(state.codeFilter)}` : '')),
+      api('/api/admin/redemptions?limit=50'),
     ]);
     state.stats = stats.stats || null;
     state.codes = codes.codes || [];
@@ -115,14 +121,13 @@ function renderStats() {
   const rows = [
     ['Live codes', s.live ?? 0],
     ['Redemptions', s.redemptions ?? 0],
-    ['Last 24h', s.last24h ?? 0],
+    ['All codes', s.codes ?? 0],
     ['Active grants', s.activeGrants ?? 0],
-    ['Master devices', s.masterDevices ?? 0],
   ];
-  $('stats').innerHTML = rows
+  document.getElementById('stats').innerHTML = rows
     .map(
       ([label, value]) =>
-        `<div class="stat"><b>${esc(value)}</b><span>${esc(label)}</span></div>`,
+        `<div class="stat"><div class="stat-value">${esc(value)}</div><div class="stat-label">${esc(label)}</div></div>`,
     )
     .join('');
 }
@@ -136,6 +141,11 @@ function visibleCodes() {
   });
 }
 
+function fmtDate(ms) {
+  if (!ms) return '—';
+  return new Date(ms).toLocaleString();
+}
+
 function renderCodes() {
   const body = $('codes').querySelector('tbody');
   const codes = visibleCodes();
@@ -143,19 +153,27 @@ function renderCodes() {
   body.innerHTML = codes
     .map((c) => {
       const grant = c.type === 'master' ? 'Lifetime' : `${c.days} days`;
-      const uses = c.maxUses === 0 ? `${c.uses}` : `${c.uses} / ${c.maxUses}`;
+      const max = c.maxUses === 0 ? '∞' : c.maxUses;
+      const mstone = c.uses > 0 ? milestoneBadge(c.uses) : '';
+      const expires = c.expiresAtMs == null ? 'Never' : fmtDate(c.expiresAtMs);
       return `<tr>
-        <td class="code"><button class="ghost small copy" data-code="${esc(c.code)}">${esc(c.code)}</button></td>
+        <td class="code">
+          <div style="display:flex;align-items:baseline;gap:6px;">
+            <span>${esc(c.code)}</span>
+            ${mstone}
+          </div>
+        </td>
         <td>${esc(grant)}</td>
-        <td>${esc(uses)}</td>
+        <td style="font-variant-numeric: tabular-nums;">${esc(c.uses)} / ${esc(max)}</td>
+        <td>${esc(expires)}</td>
         <td>${esc(c.campaign || '—')}</td>
         <td><span class="state ${esc(c.state)}">${esc(c.state)}</span></td>
-        <td class="actions">
-          <button class="ghost small redemptions" data-code="${esc(c.code)}">Log</button>
-          <button class="ghost small toggle" data-code="${esc(c.code)}" data-revoked="${c.revoked}">
+        <td style="text-align:right;">
+          <button class="btn-ghost small edit" data-code="${esc(c.code)}">Edit</button>
+          <button class="btn-ghost small toggle" data-code="${esc(c.code)}" data-revoked="${c.revoked}">
             ${c.revoked ? 'Switch on' : 'Revoke'}
           </button>
-          <button class="ghost small danger delete" data-code="${esc(c.code)}" data-used="${c.redemptionCount}">Delete</button>
+          <button class="btn-ghost small delete" data-code="${esc(c.code)}" data-used="${c.redemptionCount}">Delete</button>
         </td>
       </tr>`;
     })
@@ -165,10 +183,8 @@ function renderCodes() {
 function renderRedemptions() {
   const body = $('redemptions').querySelector('tbody');
   $('redemptions-empty').classList.toggle('hidden', state.redemptions.length > 0);
-  $('redemptions-title').textContent = state.codeFilter
-    ? `Redemptions for ${state.codeFilter}`
-    : 'Recent redemptions';
-  $('clear-filter').classList.toggle('hidden', !state.codeFilter);
+  $('redemptions-title').textContent = `Recent redemptions`;
+  $('clear-filter').classList.add('hidden');
   body.innerHTML = state.redemptions
     .map((r) => {
       const grant = r.lifetime ? 'Lifetime' : `${r.grantDays} days`;
@@ -193,10 +209,7 @@ function relative(ms) {
 }
 
 function timeOfDay(ms) {
-  return new Date(ms).toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 let toastTimer = null;
@@ -235,7 +248,6 @@ async function deleteCode(code, used) {
   );
   if (!res.ok) return toast(res.message || 'Could not delete');
   toast(`${code} deleted`);
-  if (state.codeFilter === code) state.codeFilter = '';
   await load(true);
 }
 
@@ -263,8 +275,53 @@ async function createCode(event) {
   $('create-valid').value = '0';
   $('create-error').textContent = '';
   toast(`Created ${res.code}`);
-  await load(true);
   await navigator.clipboard?.writeText(res.code).catch(() => {});
+  await load(true);
+}
+
+// ---- edit dialog ---------------------------------------------------------
+
+function openEdit(code) {
+  const c = state.codes.find((x) => x.code === code);
+  if (!c) return;
+  state.editingCode = code;
+  $('edit-code').value = c.code;
+  $('edit-days').value = c.type === 'master' ? '' : c.days;
+  $('edit-max').value = c.maxUses === 0 ? '' : c.maxUses;
+  $('edit-expires').value = c.expiresAtMs == null ? '' : new Date(c.expiresAtMs).toISOString().slice(0, 16);
+  $('edit-campaign').value = c.campaign || '';
+  $('edit-notes').value = c.notes || '';
+  $('edit-revoked').checked = c.revoked;
+  $('edit-error').textContent = '';
+  $('edit-dialog').showModal();
+}
+
+async function saveEdit(event) {
+  event.preventDefault();
+  if (!state.editingCode) return;
+  const body = {};
+  const daysVal = $('edit-days').value.trim();
+  if (daysVal !== '') body.days = Math.max(0, Math.trunc(Number(daysVal) || 0));
+  const maxVal = $('edit-max').value.trim();
+  if (maxVal !== '') body.maxUses = Math.max(0, Math.trunc(Number(maxVal) || 0));
+  const expVal = $('edit-expires').value.trim();
+  body.expiresAtMs = expVal === '' ? null : new Date(expVal).getTime();
+  body.campaign = $('edit-campaign').value.trim();
+  body.notes = $('edit-notes').value.trim();
+  body.revoked = $('edit-revoked').checked;
+
+  const res = await api(`/api/admin/codes/${encodeURIComponent(state.editingCode)}`, {
+    method: 'PATCH',
+    body,
+  });
+  if (!res.ok) {
+    $('edit-error').textContent = res.message || 'Could not save';
+    return;
+  }
+  $('edit-dialog').close();
+  state.editingCode = null;
+  toast(`${state.editingCode} updated`);
+  await load(true);
 }
 
 // ---- wiring --------------------------------------------------------------
@@ -285,10 +342,6 @@ $('state').addEventListener('change', (event) => {
   state.filter = event.target.value;
   renderCodes();
 });
-$('clear-filter').addEventListener('click', () => {
-  state.codeFilter = '';
-  load(true);
-});
 $('new-code').addEventListener('click', () => {
   $('create-error').textContent = '';
   $('create-dialog').showModal();
@@ -298,7 +351,7 @@ $('create-form').addEventListener('submit', createCode);
 
 $('create-type').addEventListener('change', (event) => {
   const master = event.target.value === 'master';
-  $('create-days').closest('label').style.opacity = master ? '0.4' : '1';
+  $('create-days').closest('label').style.opacity = master ? '0.45' : '1';
   $('create-days').disabled = master;
 });
 
@@ -314,25 +367,17 @@ $('codes').addEventListener('click', async (event) => {
   const target = event.target.closest('button');
   if (!target) return;
   const code = target.dataset.code;
-  if (target.classList.contains('copy')) {
-    await navigator.clipboard?.writeText(code).catch(() => {});
-    return toast(`Copied ${code}`);
-  }
-  if (target.classList.contains('toggle')) {
-    return toggleCode(code, target.dataset.revoked === 'true');
-  }
-  if (target.classList.contains('delete')) {
-    return deleteCode(code, target.dataset.used);
-  }
-  if (target.classList.contains('redemptions')) {
-    state.codeFilter = code;
-    $('redemptions-title').textContent = `Redemptions for ${code}`;
-    await load(true);
-    document
-      .getElementById('redemptions')
-      .scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }
+  if (target.classList.contains('edit')) return openEdit(code);
+  if (target.classList.contains('toggle')) return toggleCode(code, target.dataset.revoked === 'true');
+  if (target.classList.contains('delete')) return deleteCode(code, target.dataset.used);
 });
+
+// edit dialog
+$('edit-cancel').addEventListener('click', () => {
+  $('edit-dialog').close();
+  state.editingCode = null;
+});
+$('edit-form').addEventListener('submit', saveEdit);
 
 // boot
 if (state.token) {

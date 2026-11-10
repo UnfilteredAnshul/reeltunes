@@ -4,63 +4,95 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="robots" content="noindex" />
-    <title>ReelTunes codes</title>
+    <title>ReelTunes · Codes</title>
+    <link rel="icon" href="/logo.png" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div id="login" class="login hidden">
-      <form id="login-form" class="login-card">
-        <div class="brand">ReelTunes</div>
-        <h1>Code dashboard</h1>
-        <p class="muted">
-          Paste the admin token. It stays in this browser only.
-        </p>
-        <input
-          id="token"
-          type="password"
-          autocomplete="current-password"
-          placeholder="Admin token"
-          required
-        />
-        <button type="submit">Open dashboard</button>
-        <p id="login-error" class="error"></p>
-      </form>
+    <div id="login" class="login">
+      <div class="login-card">
+        <div class="app-mark">
+          <img src="/logo.png" alt="ReelTunes" class="app-icon" />
+        </div>
+        <h1>ReelTunes Codes</h1>
+        <p class="muted">Sign in to the code dashboard.</p>
+        <form id="login-form">
+          <label class="field">
+            <span class="field-label">Admin token</span>
+            <input
+              id="token"
+              type="password"
+              autocomplete="current-password"
+              placeholder="Paste your admin token"
+              required
+            />
+          </label>
+          <p id="login-error" class="error"></p>
+          <button type="submit" class="btn">Open dashboard</button>
+        </form>
+      </div>
     </div>
 
     <div id="app" class="hidden">
       <header class="topbar">
-        <div class="brand">ReelTunes <span class="muted">codes</span></div>
+        <div class="app-mark">
+          <img src="/logo.png" alt="ReelTunes" class="app-icon" />
+        </div>
+        <div class="topbar-title">ReelTunes <span class="muted">· Codes</span></div>
         <div class="topbar-actions">
-          <span id="sync" class="muted small">connecting</span>
-          <button id="refresh" class="ghost" type="button">Refresh</button>
-          <button id="signout" class="ghost" type="button">Sign out</button>
+          <span id="sync" class="muted small">syncing</span>
+          <button id="refresh" class="btn-ghost" type="button">Refresh</button>
+          <button id="signout" class="btn-ghost" type="button">Sign out</button>
         </div>
       </header>
 
-      <main>
-        <section class="stats" id="stats"></section>
+      <main class="shell">
+        <section class="stats">
+          <div class="stat">
+            <div class="stat-value" id="stat-live">—</div>
+            <div class="stat-label">Live codes</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value" id="stat-codes">—</div>
+            <div class="stat-label">All codes</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value" id="stat-redemptions">—</div>
+            <div class="stat-label">Redemptions</div>
+          </div>
+          <div class="stat">
+            <div class="stat-value" id="stat-grants">—</div>
+            <div class="stat-label">Active grants</div>
+          </div>
+        </section>
 
         <section class="panel">
           <div class="panel-head">
             <div>
-              <h2>Codes</h2>
-              <p class="muted small">
-                Changes apply to every install on its next redeem.
+              <h2 class="panel-title">Codes</h2>
+              <p class="panel-sub">
+                One redemption per code per device. Changes apply everywhere.
               </p>
             </div>
-            <button id="new-code" type="button">New code</button>
+            <button id="new-code" class="btn" type="button">New code</button>
           </div>
 
           <div class="toolbar">
-            <input id="search" type="search" placeholder="Search code" />
-            <select id="state">
-              <option value="">All states</option>
-              <option value="live">Live</option>
-              <option value="revoked">Revoked</option>
-              <option value="expired">Expired</option>
-              <option value="used">Fully used</option>
-            </select>
-            <button id="revoke-all" class="danger ghost" type="button">
+            <label class="field">
+              <span class="field-label">Search</span>
+              <input id="search" type="search" placeholder="Search code" />
+            </label>
+            <label class="field">
+              <span class="field-label">State</span>
+              <select id="state">
+                <option value="">All states</option>
+                <option value="live">Live</option>
+                <option value="revoked">Revoked</option>
+                <option value="expired">Expired</option>
+                <option value="used">Fully used</option>
+              </select>
+            </label>
+            <button id="revoke-all" class="btn-danger" type="button">
               Revoke all
             </button>
           </div>
@@ -69,12 +101,13 @@
             <table id="codes">
               <thead>
                 <tr>
-                  <th>Code</th>
-                  <th>Grant</th>
-                  <th>Uses</th>
-                  <th>Campaign</th>
-                  <th>State</th>
-                  <th></th>
+                  <th class="th-code">Code</th>
+                  <th class="th-grant">Grant</th>
+                  <th class="th-uses">Uses</th>
+                  <th class="th-expires">Expires</th>
+                  <th class="th-campaign">Campaign</th>
+                  <th class="th-state">State</th>
+                  <th class="th-actions"></th>
                 </tr>
               </thead>
               <tbody></tbody>
@@ -86,12 +119,10 @@
         <section class="panel">
           <div class="panel-head">
             <div>
-              <h2 id="redemptions-title">Recent redemptions</h2>
-              <p class="muted small">
-                Device tag only. One redemption per code per device.
-              </p>
+              <h2 class="panel-title" id="redemptions-title">Recent redemptions</h2>
+              <p class="panel-sub">Device tag only. One redemption per code per device.</p>
             </div>
-            <button id="clear-filter" class="ghost hidden" type="button">
+            <button id="clear-filter" class="btn-ghost hidden" type="button">
               Show all
             </button>
           </div>
@@ -99,10 +130,10 @@
             <table id="redemptions">
               <thead>
                 <tr>
-                  <th>Code</th>
-                  <th>Device</th>
-                  <th>Grant</th>
-                  <th>When</th>
+                  <th class="th-code">Code</th>
+                  <th class="th-device">Device</th>
+                  <th class="th-grant">Grant</th>
+                  <th class="th-time">When</th>
                 </tr>
               </thead>
               <tbody></tbody>
@@ -111,26 +142,65 @@
           <p id="redemptions-empty" class="empty hidden">Nothing yet.</p>
         </section>
 
-        <p class="foot muted small">
-          ReelTunes codes grant time, never a Play price. Revoking a code stops
-          future redemptions; existing Pro time is untouched.
+        <p class="foot muted">
+          ReelTunes codes grant time, never a Play price. Revoking stops future
+          redemptions; already granted Pro time is untouched.
         </p>
       </main>
     </div>
 
+    <dialog id="edit-dialog">
+      <form id="edit-form">
+        <h2 class="dialog-title">Edit code</h2>
+        <label class="field">
+          <span class="field-label">Code</span>
+          <input id="edit-code" type="text" readonly />
+        </label>
+        <label class="field">
+          <span class="field-label">Grant days</span>
+          <input id="edit-days" type="number" min="0" />
+        </label>
+        <label class="field">
+          <span class="field-label">Max uses</span>
+          <input id="edit-max" type="number" min="0" />
+        </label>
+        <label class="field">
+          <span class="field-label">Code valid until</span>
+          <input id="edit-expires" type="datetime-local" />
+        </label>
+        <label class="field">
+          <span class="field-label">Campaign</span>
+          <input id="edit-campaign" type="text" />
+        </label>
+        <label class="field">
+          <span class="field-label">Notes</span>
+          <input id="edit-notes" type="text" />
+        </label>
+        <label class="field toggle-field">
+          <input id="edit-revoked" type="checkbox" />
+          <span class="toggle-label">Revoked (no future redemptions)</span>
+        </label>
+        <p id="edit-error" class="error"></p>
+        <div class="dialog-actions">
+          <button id="edit-cancel" class="btn-ghost" type="button">Cancel</button>
+          <button type="submit" class="btn">Save changes</button>
+        </div>
+      </form>
+    </dialog>
+
     <dialog id="create-dialog">
       <form id="create-form">
-        <h2>New code</h2>
-        <label>
-          Type
+        <h2 class="dialog-title">New code</h2>
+        <label class="field">
+          <span class="field-label">Type</span>
           <select id="create-type">
             <option value="pro_grant">Pro grant (days)</option>
             <option value="pro_long">Long Pro grant (days)</option>
             <option value="master">Lifetime Pro</option>
           </select>
         </label>
-        <label>
-          Code
+        <label class="field">
+          <span class="field-label">Code</span>
           <input
             id="create-code"
             type="text"
@@ -139,28 +209,28 @@
             autocapitalize="characters"
           />
         </label>
-        <div class="row">
-          <label>
-            Days of Pro
+        <div class="fields-row">
+          <label class="field">
+            <span class="field-label">Days of Pro</span>
             <input id="create-days" type="number" min="1" max="3650" value="30" />
           </label>
-          <label>
-            Max uses
+          <label class="field">
+            <span class="field-label">Max uses</span>
             <input id="create-max" type="number" min="0" value="0" />
           </label>
         </div>
-        <div class="row">
-          <label>
-            Code valid for (days)
+        <div class="fields-row">
+          <label class="field">
+            <span class="field-label">Code valid for (days)</span>
             <input id="create-valid" type="number" min="0" value="0" />
           </label>
-          <label>
-            Campaign
+          <label class="field">
+            <span class="field-label">Campaign</span>
             <input id="create-campaign" type="text" placeholder="launch-1000" />
           </label>
         </div>
-        <label>
-          Notes
+        <label class="field">
+          <span class="field-label">Notes</span>
           <input id="create-notes" type="text" placeholder="Optional" />
         </label>
         <p class="muted small">
@@ -168,8 +238,8 @@
         </p>
         <p id="create-error" class="error"></p>
         <div class="dialog-actions">
-          <button id="create-cancel" class="ghost" type="button">Cancel</button>
-          <button type="submit">Create code</button>
+          <button id="create-cancel" class="btn-ghost" type="button">Cancel</button>
+          <button type="submit" class="btn">Create code</button>
         </div>
       </form>
     </dialog>
