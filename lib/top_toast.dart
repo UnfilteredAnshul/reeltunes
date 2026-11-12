@@ -17,7 +17,16 @@ Timer? _timer;
 ///
 /// [error] only changes the icon and tint: the sentence itself is always the
 /// generic one the user should see (exact reasons go to logcat).
-void showTopToast(BuildContext context, String message, {bool error = false}) {
+///
+/// [actionLabel] + [onAction] add one tap target ("Guide") so an error toast
+/// can point at the explanation without opening a sheet on its own.
+void showTopToast(
+  BuildContext context,
+  String message, {
+  bool error = false,
+  String? actionLabel,
+  VoidCallback? onAction,
+}) {
   final overlay = Overlay.maybeOf(context, rootOverlay: true);
   if (overlay == null) return;
 
@@ -30,6 +39,8 @@ void showTopToast(BuildContext context, String message, {bool error = false}) {
     builder: (_) => _TopToast(
       message: message,
       error: error,
+      actionLabel: actionLabel,
+      onAction: onAction,
       onDone: () {
         if (_active == entry) {
           _active = null;
@@ -45,11 +56,15 @@ void showTopToast(BuildContext context, String message, {bool error = false}) {
 class _TopToast extends StatefulWidget {
   final String message;
   final bool error;
+  final String? actionLabel;
+  final VoidCallback? onAction;
   final VoidCallback onDone;
   const _TopToast({
     required this.message,
     required this.onDone,
     this.error = false,
+    this.actionLabel,
+    this.onAction,
   });
 
   @override
@@ -68,7 +83,10 @@ class _TopToastState extends State<_TopToast>
   void initState() {
     super.initState();
     _c.forward();
-    _timer = Timer(const Duration(milliseconds: 2600), _leave);
+    _timer = Timer(
+      Duration(milliseconds: widget.actionLabel == null ? 2600 : 4600),
+      _leave,
+    );
   }
 
   Future<void> _leave() async {
@@ -137,6 +155,29 @@ class _TopToastState extends State<_TopToast>
                           style: TextStyle(color: fg, fontSize: 14),
                         ),
                       ),
+                      if (widget.actionLabel != null) ...[
+                        const SizedBox(width: 8),
+                        TextButton(
+                          onPressed: () {
+                            final action = widget.onAction;
+                            _leave();
+                            action?.call();
+                          },
+                          style: TextButton.styleFrom(
+                            foregroundColor: fg,
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            minimumSize: const Size(0, 32),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          child: Text(
+                            widget.actionLabel!,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ],
                     ]),
                   ),
                 ),

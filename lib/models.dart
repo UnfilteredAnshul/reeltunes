@@ -150,6 +150,10 @@ class AppStore extends ChangeNotifier {
   bool confirmDelete = true; // ask before deleting a track
   bool confirmRemove = true; // ask before removing a track from the library
   bool playDuringCalls = false; // keep audio playing when a call comes in
+  /// Whether the player and media notification survive swiping the app out of
+  /// recents. Default OFF (strict): swiping kills playback and the notification.
+  /// Absolute — whatever the checkbox says is what happens.
+  bool surviveRecentsSwipe = false;
   SortBy sortBy = SortBy.dateAdded; // default: newest first
   bool sortAsc = false; // descending = newest first when sortBy != manual
 
@@ -223,6 +227,7 @@ class AppStore extends ChangeNotifier {
     confirmDelete = _prefs.getBool('confirmDelete') ?? true;
     confirmRemove = _prefs.getBool('confirmRemove') ?? true;
     playDuringCalls = _prefs.getBool('playDuringCalls') ?? false;
+    surviveRecentsSwipe = _prefs.getBool('surviveRecentsSwipe') ?? false;
     sortBy = SortBy.values[_prefs.getInt('sortBy') ?? 0];
     sortAsc = _prefs.getBool('sortAsc') ?? true;
     guideBannerDismissed = _prefs.getBool('guideBannerDismissed') ?? false;
@@ -265,6 +270,7 @@ class AppStore extends ChangeNotifier {
     _prefs.setBool('confirmDelete', confirmDelete);
     _prefs.setBool('confirmRemove', confirmRemove);
     _prefs.setBool('playDuringCalls', playDuringCalls);
+    _prefs.setBool('surviveRecentsSwipe', surviveRecentsSwipe);
     _prefs.setInt('sortBy', sortBy.index);
     _prefs.setBool('sortAsc', sortAsc);
     _prefs.setBool('guideBannerDismissed', guideBannerDismissed);
@@ -395,6 +401,7 @@ class AppStore extends ChangeNotifier {
   void setConfirmDelete(bool v) => _mutateSetting(() => confirmDelete = v);
   void setConfirmRemove(bool v) => _mutateSetting(() => confirmRemove = v);
   void setPlayDuringCalls(bool v) => _mutateSetting(() => playDuringCalls = v);
+  void setSurviveRecentsSwipe(bool v) => _mutateSetting(() => surviveRecentsSwipe = v);
   void setSortBy(SortBy s) => _mutateSetting(() => sortBy = s);
   void setSortAsc(bool v) => _mutateSetting(() => sortAsc = v);
 
@@ -694,6 +701,27 @@ class AppStore extends ChangeNotifier {
       if (t.fileName.toLowerCase() == key) return t;
     }
     return null;
+  }
+
+  /// A title no existing track already uses.
+  ///
+  /// Reels often arrive with the same auto-title ("Video from Instagram"), and
+  /// two rows with the same name are impossible to tell apart — both in the
+  /// library and inside a playlist. The second one becomes "… (2)", the third
+  /// "… (3)", and so on.
+  String uniqueTitle(String raw) {
+    final base = raw.trim().isEmpty ? 'Audio' : raw.trim();
+    final used = {for (final t in tracks) t.title.trim().toLowerCase()};
+    if (!used.contains(base.toLowerCase())) return base;
+    // "Video from X (2)" + another "Video from X (2)" should become
+    // "Video from X (3)", not "Video from X (2) (2)".
+    final trailing = RegExp(r'^(.*?) \((\d+)\)$').firstMatch(base);
+    final stem = trailing?.group(1) ?? base;
+    var n = trailing == null ? 2 : (int.tryParse(trailing.group(2)!) ?? 1) + 1;
+    while (used.contains('$stem ($n)'.toLowerCase())) {
+      n++;
+    }
+    return '$stem ($n)';
   }
 }
 

@@ -13,12 +13,14 @@ by one D1 database.
 |---|---|---|---|
 | `GET` | `/api/health` | none | liveness |
 | `POST` | `/api/redeem` | none | validate a code, record the grant |
+| `GET` | `/api/grant?code=` | none | whether the owner removed this code's effects |
 | `GET` | `/api/admin/session` | admin | token check |
 | `GET` | `/api/admin/stats` | admin | counters |
 | `GET` | `/api/admin/codes` | admin | list codes |
 | `POST` | `/api/admin/codes` | admin | create a code |
 | `PATCH` | `/api/admin/codes/:code` | admin | revoke / update |
 | `DELETE` | `/api/admin/codes/:code` | admin | delete (`?force=1` keeps log clean) |
+| `POST` | `/api/admin/codes/:code/remove-effects` | admin | switch off (or restore) the Pro granted by a code |
 | `GET` | `/api/admin/redemptions` | admin | recent log |
 | `POST` | `/api/admin/revoke-all` | admin | revoke every campaign code |
 | `GET/POST` | `/api/admin/master-devices` | admin | master allowlist |
@@ -49,6 +51,9 @@ npx wrangler d1 execute reeltunes-codes --remote --file=worker/codes/schema.sql 
 # secrets (choose a long random ADMIN_TOKEN)
 Get-Content .scratch\codes-admin-token.txt | npx wrangler secret put ADMIN_TOKEN --config worker/codes/wrangler.jsonc
 "YOUR-MASTER-CODE" | npx wrangler secret put MASTER_CODE --config worker/codes/wrangler.jsonc
+
+# existing database: apply new migrations once, in order
+npx wrangler d1 execute reeltunes-codes --remote --config worker/codes/wrangler.jsonc --file=worker/codes/migrations/0002_effects_removed.sql
 
 # every change
 npx wrangler deploy --config worker/codes/wrangler.jsonc

@@ -47,6 +47,13 @@ class FolderFile {
   });
 }
 
+/// Where a saved file landed, after the bridge made its name unique.
+class FolderSaveResult {
+  final String uri;
+  final String name;
+  const FolderSaveResult({required this.uri, required this.name});
+}
+
 class FolderAccess {
   /// Current link state (the grant lives in Android's prefs, not ours).
   static Future<LinkedFolder> state() async {
@@ -82,15 +89,44 @@ class FolderAccess {
   }
 
   /// Opens the folder picker. Returns null when the user backs out.
-  /// [preferDefault] parks the picker on Download (where the app folder lives).
+  /// [preferDefault] creates Downloads/ReelTune Audios when needed and parks
+  /// the picker INSIDE it, so the user only has to tap "Use this folder".
   static Future<LinkedFolder?> link({bool preferDefault = false}) async {
     try {
+      if (preferDefault) await ensureDefault();
       final raw = await _channel.invokeMethod<Map<dynamic, dynamic>>(
           'link', {'preferDefault': preferDefault});
       if (raw == null) return null;
       return await state();
     } on PlatformException {
       return null;
+    }
+  }
+
+  /// Makes sure `Downloads/ReelTune Audios` exists before the first picker
+  /// opens. Returns false when the platform could not create it (the picker
+  /// then opens on Download instead). Never throws: setup must not dead-end.
+  static Future<bool> ensureDefault() async {
+    try {
+      return await _channel.invokeMethod<bool>('ensureDefault') ?? false;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException {
+      return false;
+    }
+  }
+
+  /// True when a saved document URI still resolves. Used to verify a save
+  /// actually landed before telling the user it failed.
+  static Future<bool> exists(String uri) async {
+    try {
+      return await _channel
+              .invokeMethod<bool>('exists', {'uri': uri}) ??
+          false;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException {
+      return false;
     }
   }
 
@@ -126,9 +162,10 @@ class FolderAccess {
     }
   }
 
-  /// Copies [sourcePath] into the linked folder. Returns the new document URI,
-  /// or null when the folder is not linked / not writable.
-  static Future<String?> save({
+  /// Copies [sourcePath] into the linked folder. Returns where it landed (the
+  /// bridge appends " 2", " 3" instead of overwriting an existing file), or
+  /// null when the folder is not linked / not writable.
+  static Future<FolderSaveResult?> save({
     required String sourcePath,
     required String fileName,
     String? subdir,
@@ -142,7 +179,12 @@ class FolderAccess {
           'subdir': subdir,
         },
       );
-      return raw?['uri']?.toString();
+      final uri = raw?['uri']?.toString();
+      if (uri == null || uri.isEmpty) return null;
+      return FolderSaveResult(
+        uri: uri,
+        name: raw?['name']?.toString() ?? fileName,
+      );
     } on PlatformException {
       return null;
     }

@@ -33,6 +33,10 @@ class Entitlements extends ChangeNotifier {
 
   SharedPreferences? _prefs;
   DateTime? _trialStartedAt;
+  /// The user was offered the trial after setting up their folder and chose
+  /// the free plan instead. That choice is final: the trial is forfeited, not
+  /// re-offered on every launch.
+  bool _trialDeclined = false;
   bool _purchased = false;
   bool _billingTrial = false;
   bool _willRenew = false;
@@ -69,6 +73,7 @@ class Entitlements extends ChangeNotifier {
     if (ms != null && ms > 0) {
       _trialStartedAt = DateTime.fromMillisecondsSinceEpoch(ms);
     }
+    _trialDeclined = prefs.getBool('trialDeclined') ?? false;
     _purchased = prefs.getBool('proPurchased') ?? false;
     _billingTrial = prefs.getBool('proTrial') ?? false;
     _willRenew = prefs.getBool('proWillRenew') ?? false;
@@ -127,12 +132,49 @@ class Entitlements extends ChangeNotifier {
 
   /// Called every time a folder is linked successfully. The first link is the
   /// moment the app is really in use, so that is when the clock starts.
+  ///
+  /// Only the explicit trial choice calls this now. Linking a folder no longer
+  /// starts the clock on its own: the user is asked "trial or free?" once, and
+  /// choosing free permanently forfeits the trial.
   Future<void> startTrialIfNeeded() async {
-    if (_trialStartedAt != null) return;
+    if (_trialStartedAt != null || _trialDeclined) return;
     _trialStartedAt = DateTime.now();
     await _prefs?.setInt(
         'trialStartMs', _trialStartedAt!.millisecondsSinceEpoch);
     _changedWithNotifs();
+  }
+
+  /// The user accepted the 7-day trial from the post-setup prompt.
+  Future<void> startTrial() async {
+    _trialDeclined = false;
+    await _prefs?.remove('trialDeclined');
+    await startTrialIfNeeded();
+  }
+
+  /// The user chose "continue free" after setting up their folder. The trial
+  /// is gone for good on this install; [trialDecisionNeeded] stays false.
+  Future<void> declineTrial() async {
+    _trialDeclined = true;
+    await _prefs?.setBool('trialDeclined', true);
+    _changedWithNotifs();
+  }
+
+  bool get trialDeclined => _trialDeclined;
+
+  /// True when the folder is set up but the user has not yet chosen between
+  /// the trial and the free plan. Drives the one-time choice sheet.
+  bool get trialDecisionNeeded =>
+      _trialStartedAt == null &&
+      !_trialDeclined &&
+      !purchased &&
+      !_debugPro &&
+      !codeGrantActive;
+
+  /// A mirror carried the choice across a reinstall, so "free" cannot be
+  /// undone by reinstalling the app.
+  Future<void> adoptTrialDeclined(bool declined) async {
+    if (!declined || _trialDeclined) return;
+    await declineTrial();
   }
 
   /// A mirror found in the user's audios folder carries the original trial
@@ -148,6 +190,7 @@ class Entitlements extends ChangeNotifier {
 
   /// No folder linked yet = nothing to limit, so the app behaves as Pro.
   bool get trialActive {
+    if (_trialDeclined) return false;
     final end = trialEndsAt;
     if (end == null) return true;
     return DateTime.now().isBefore(end);
@@ -289,7 +332,11 @@ class Entitlements extends ChangeNotifier {
   /// 3 or 1 on the day a nudge is due, otherwise null. Each one is shown once,
   /// which is why the day is stored rather than a plain bool.
   int? get dueTrialReminder {
-    if (purchased || _debugPro || codeGrantActive || _trialStartedAt == null) {
+    if (_trialDeclined ||
+        purchased ||
+        _debugPro ||
+        codeGrantActive ||
+        _trialStartedAt == null) {
       return null;
     }
     final prefs = _prefs;
@@ -551,7 +598,9 @@ class Entitlements extends ChangeNotifier {
   Future<void> resetTrial() async {
     if (!kDebugMode) return;
     _trialStartedAt = null;
+    _trialDeclined = false;
     await _prefs?.remove('trialStartMs');
+    await _prefs?.remove('trialDeclined');
     await _prefs?.remove('reminderShown3');
     await _prefs?.remove('reminderShown1');
     _changedWithNotifs();
@@ -577,6 +626,7 @@ class Entitlements extends ChangeNotifier {
       final end = _grantUntil!;
       return 'Pro · code until ${_shortDate(end)}';
     }
+    if (_trialDeclined) return 'Free';
     if (_trialStartedAt == null) return 'Trial not started';
     if (!trialActive) return 'Free';
     final d = trialDaysLeft;

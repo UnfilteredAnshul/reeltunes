@@ -24,17 +24,40 @@ class LibrarySync {
   static Future<void> init() async {
     folder = await FolderAccess.state();
     _applyToStore();
+    // Before anything is picked, make sure Downloads/ReelTune Audios exists so
+    // the first "Use default folder" tap lands inside it. No permission is
+    // needed on Android 10+ (MediaStore); an older phone falls back to the
+    // picker, which creates it through SAF.
+    if (!folder.linked) {
+      await FolderAccess.ensureDefault();
+    }
     AppStore.I.onLibrarySaved = () async => _scheduleMirror();
     await restoreIfEmpty();
-    // A mirror carries an older trial start; only start a fresh clock when
-    // there was none (first install).
-    if (folder.linked) await Entitlements.I.startTrialIfNeeded();
     await sync();
   }
 
   static Future<void> refreshState() async {
     folder = await FolderAccess.state();
     _applyToStore();
+  }
+
+  /// Returns true when the folder grant is alive and writes will work.
+  /// Returns false (and sets folderAccessLost) when the grant is gone or the
+  /// folder was never linked. Call before any save/extract operation.
+  static Future<bool> ensureFolderAccess() async {
+    folder = await FolderAccess.state();
+    _applyToStore();
+    if (!folder.linked) {
+      AppStore.I.setFolderAccessLost(true);
+      return false;
+    }
+    final alive = await FolderAccess.probe();
+    if (!alive) {
+      AppStore.I.setFolderAccessLost(true);
+      return false;
+    }
+    AppStore.I.setFolderAccessLost(false);
+    return true;
   }
 
   /// Opens the folder picker. Returns the folder, or null if the user backed
@@ -46,7 +69,6 @@ class LibrarySync {
     folder = picked;
     _applyToStore();
     await restoreIfEmpty();
-    await Entitlements.I.startTrialIfNeeded();
     await sync();
     await mirror();
     return picked;
@@ -56,6 +78,20 @@ class LibrarySync {
     await FolderAccess.unlink();
     folder = const LinkedFolder(linked: false);
     _applyToStore();
+  }
+
+  /// Opens the folder picker inside Downloads/ReelTune Audios so the user can
+  /// re-grant access after the SAF grant has been revoked (Android 16+,
+  /// permission resets, OEM clean-up).
+  static Future<LinkedFolder?> reLinkFolder() async {
+    final picked = await FolderAccess.link(preferDefault: true);
+    if (picked == null || !picked.linked) return null;
+    folder = picked;
+    _applyToStore();
+    await restoreIfEmpty();
+    await sync();
+    await mirror();
+    return picked;
   }
 
   static void _applyToStore() {
@@ -194,6 +230,9 @@ class LibrarySync {
       // Survives uninstall with the folder, so a reinstall cannot restart the
       // 7-day trial (docs/free-vs-pro.md §7).
       'trialStartMs': Entitlements.I.trialStartedAt?.millisecondsSinceEpoch,
+      // "Continue free" also travels: the trial stays forfeited after a
+      // reinstall rather than being offered again.
+      'trialDeclined': Entitlements.I.trialDeclined,
       // Pro time from a redeemed code travels with the folder as well, so a
       // reinstall restores what the user already earned.
       'grant': Entitlements.I.codeGrantMirror,
@@ -233,6 +272,7 @@ class LibrarySync {
     // The folder remembers when the trial started; adopt it before importing
     // anything so caps are applied with the right plan.
     await Entitlements.I.adoptTrialStart((data['trialStartMs'] as num?)?.toInt());
+    await Entitlements.I.adoptTrialDeclined(data['trialDeclined'] == true);
     final grant = data['grant'];
     if (grant is Map) {
       await Entitlements.I.adoptCodeGrant(

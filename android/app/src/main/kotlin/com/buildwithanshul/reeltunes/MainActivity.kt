@@ -2,10 +2,12 @@ package com.buildwithanshul.reeltunes
 
 import android.app.Activity
 import android.content.Intent
+import android.content.SharedPreferences
 import android.net.Uri
 import android.os.Bundle
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
+import androidx.preference.PreferenceManager
 import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -53,7 +55,8 @@ class MainActivity : AudioServiceActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, MEDIA_CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
-                    "pickMediaFiles" -> launchPicker(result, folder = false)
+                    "pickMediaFile" -> launchPicker(result, folder = false, multiple = false)
+                    "pickMediaFiles" -> launchPicker(result, folder = false, multiple = true)
                     "pickMediaFolder" -> launchPicker(result, folder = true)
                     else -> result.notImplemented()
                 }
@@ -110,7 +113,11 @@ class MainActivity : AudioServiceActivity() {
             }
     }
 
-    private fun launchPicker(result: MethodChannel.Result, folder: Boolean) {
+    private fun launchPicker(
+        result: MethodChannel.Result,
+        folder: Boolean,
+        multiple: Boolean = true
+    ) {
         // The picker UI is modal, so only one request can be in flight.
         if (pendingMedia != null) {
             result.success(emptyList<Map<String, Any?>>())
@@ -124,7 +131,9 @@ class MainActivity : AudioServiceActivity() {
                 addCategory(Intent.CATEGORY_OPENABLE)
                 type = "*/*"
                 putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("audio/*", "video/*"))
-                putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                // Single-file mode omits this flag so the system picker only
+                // lets one item be selected.
+                if (multiple) putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
             }
         }
         intent.addFlags(
@@ -215,7 +224,55 @@ class MainActivity : AudioServiceActivity() {
         val name = displayName(uri) ?: return null
         val mime = contentResolver.getType(uri) ?: ""
         if (!isMedia(mime, name)) return null
-        return mapOf("uri" to uri.toString(), "name" to name, "mime" to mime)
+        return mapOf(
+            "uri" to uri.toString(),
+            "name" to name,
+            "mime" to mime,
+            // Newest-first import ordering needs a real timestamp. Providers
+            // may expose only one of these columns (or neither).
+            "modified" to lastModifiedMs(uri),
+            "size" to sizeOf(uri)
+        )
+    }
+
+    private fun lastModifiedMs(uri: Uri): Long {
+        for (column in LAST_MODIFIED_COLUMNS) {
+            try {
+                contentResolver.query(
+                    uri,
+                    arrayOf(column),
+                    null,
+                    null,
+                    null
+                )?.use { cursor ->
+                    if (cursor.moveToFirst() && !cursor.isNull(0)) {
+                        val value = cursor.getLong(0)
+                        if (value > 0) {
+                            // date_modified is seconds; last_modified is ms.
+                            return if (column == "date_modified") value * 1000
+                            else value
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                // Column not supported by this provider: try the next one.
+            }
+        }
+        return 0
+    }
+
+    private fun sizeOf(uri: Uri): Long = try {
+        contentResolver.query(
+            uri,
+            arrayOf(OpenableColumns.SIZE),
+            null,
+            null,
+            null
+        )?.use { cursor ->
+            if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else 0L
+        } ?: 0L
+    } catch (_: Exception) {
+        0L
     }
 
     private fun displayName(uri: Uri): String? = try {
@@ -253,7 +310,9 @@ class MainActivity : AudioServiceActivity() {
             arrayOf(
                 DocumentsContract.Document.COLUMN_DOCUMENT_ID,
                 DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                DocumentsContract.Document.COLUMN_MIME_TYPE
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+                DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+                DocumentsContract.Document.COLUMN_SIZE
             ),
             null,
             null,
@@ -273,7 +332,9 @@ class MainActivity : AudioServiceActivity() {
                                 .buildDocumentUriUsingTree(treeUri, id)
                                 .toString(),
                             "name" to name,
-                            "mime" to mime
+                            "mime" to mime,
+                            "modified" to cursor.getLong(3),
+                            "size" to cursor.getLong(4)
                         )
                     )
                 }
@@ -292,10 +353,16 @@ class MainActivity : AudioServiceActivity() {
     }
 
     override fun onDestroy() {
-        // isFinishing covers task removal; config changes are handled by the
-        // activity itself, and background memory reclaims are not finishing.
-        if (isFinishing && !isChangingConfigurations && !leavingWithBack) {
-            clearMediaNotification()
+        // Config changes and back-press are guarded; everything else (task
+        // removal, swiping from recents) reaches here. The checkbox is
+        // absolute: off (default) stops playback and kills the notification,
+        // on lets it survive the swipe.
+        if (!isChangingConfigurations && !leavingWithBack) {
+            val prefs: SharedPreferences = PreferenceManager.getDefaultSharedPreferences(this)
+            val survive = prefs.getBoolean("surviveRecentsSwipe", false)
+            if (!survive) {
+                clearMediaNotification()
+            }
         }
         super.onDestroy()
     }
@@ -322,6 +389,7 @@ private val MEDIA_EXTENSIONS = setOf(
     "mp3", "m4a", "aac", "wav", "ogg", "oga", "opus", "flac",
     "mp4", "mkv", "webm", "avi", "m4v", "mov", "3gp"
 )
+private val LAST_MODIFIED_COLUMNS = listOf("last_modified", "date_modified")
 private const val MEDIA_CHANNEL = "com.buildwithanshul.reeltunes/media"
 private const val REMINDER_CHANNEL = "com.buildwithanshul.reeltunes/reminders"
 private const val REQUEST_FILES = 4312

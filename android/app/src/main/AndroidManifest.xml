@@ -14,6 +14,10 @@
          reboot. Neither permission sends data anywhere. -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <!-- Only Android 9 and older: create Downloads/ReelTune Audios with a raw
+         mkdir. Android 10+ uses MediaStore instead and needs no permission. -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28"/>
     <!-- Play Billing, via RevenueCat (purchases_flutter). Declared here as well
          as in the plugin AAR so the merged manifest always has it. -->
     <uses-permission android:name="com.android.vending.BILLING"/>

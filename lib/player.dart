@@ -84,8 +84,14 @@ class RtPlayer extends ChangeNotifier {
       _bgInit ??= JustAudioBackground.init(
         androidNotificationChannelId: 'com.buildwithanshul.reeltunes.playback',
         androidNotificationChannelName: 'ReelTunes playback',
+        // A dedicated white silhouette. The old default was the adaptive
+        // launcher icon, which Android rejects as a small icon — the media
+        // notification was posted but never appeared in the shade.
+        androidNotificationIcon: 'drawable/ic_stat_music',
         androidNotificationOngoing: true,
-        androidStopForegroundOnPause: true,
+        // Keep the notification (and its play button) visible while paused so
+        // it does not vanish the moment the app is backgrounded.
+        androidStopForegroundOnPause: false,
       );
 
   Future<void> _boot() async {

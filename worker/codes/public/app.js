@@ -155,12 +155,16 @@ function renderCodes() {
       const grant = c.type === 'master' ? 'Lifetime' : `${c.days} days`;
       const max = c.maxUses === 0 ? '∞' : c.maxUses;
       const mstone = c.uses > 0 ? milestoneBadge(c.uses) : '';
+      const fx = c.effectsRemoved
+        ? '<span class="fx" title="Pro from this code was removed on every device">effects off</span>'
+        : '';
       const expires = c.expiresAtMs == null ? 'Never' : fmtDate(c.expiresAtMs);
       return `<tr>
         <td class="code">
           <div style="display:flex;align-items:baseline;gap:6px;">
             <span>${esc(c.code)}</span>
             ${mstone}
+            ${fx}
           </div>
         </td>
         <td>${esc(grant)}</td>
@@ -173,6 +177,11 @@ function renderCodes() {
           <button class="btn-ghost small toggle" data-code="${esc(c.code)}" data-revoked="${c.revoked}">
             ${c.revoked ? 'Switch on' : 'Revoke'}
           </button>
+          ${c.uses > 0 || c.effectsRemoved
+            ? `<button class="btn-ghost small effects" data-code="${esc(c.code)}" data-removed="${c.effectsRemoved}">
+                 ${c.effectsRemoved ? 'Restore effects' : 'Remove effects'}
+               </button>`
+            : ''}
           <button class="btn-ghost small delete" data-code="${esc(c.code)}" data-used="${c.redemptionCount}">Delete</button>
         </td>
       </tr>`;
@@ -251,6 +260,26 @@ async function deleteCode(code, used) {
   await load(true);
 }
 
+async function removeEffects(code, removed) {
+  const ok = confirm(
+    removed
+      ? `Remove Pro from every device that redeemed ${code}? ` +
+        'Redemptions and the code itself stay; the Pro it granted is switched ' +
+        'off the next time the app opens.'
+      : `Switch the Pro from ${code} back on for its redeeming devices?`,
+  );
+  if (!ok) return;
+  const res = await api(
+    `/api/admin/codes/${encodeURIComponent(code)}/remove-effects`,
+    { method: 'POST', body: { removed } },
+  );
+  if (!res.ok) {
+    return toast(res.message || 'Could not update effects');
+  }
+  toast(removed ? `${code} effects removed` : `${code} effects restored`);
+  await load(true);
+}
+
 async function createCode(event) {
   event.preventDefault();
   const type = $('create-type').value;
@@ -299,9 +328,12 @@ function openEdit(code) {
 async function saveEdit(event) {
   event.preventDefault();
   if (!state.editingCode) return;
+  const editing = state.codes.find((x) => x.code === state.editingCode);
   const body = {};
   const daysVal = $('edit-days').value.trim();
-  if (daysVal !== '') body.days = Math.max(0, Math.trunc(Number(daysVal) || 0));
+  if (daysVal !== '' && editing?.type !== 'master') {
+    body.days = Math.max(0, Math.trunc(Number(daysVal) || 0));
+  }
   const maxVal = $('edit-max').value.trim();
   if (maxVal !== '') body.maxUses = Math.max(0, Math.trunc(Number(maxVal) || 0));
   const expVal = $('edit-expires').value.trim();
@@ -318,9 +350,10 @@ async function saveEdit(event) {
     $('edit-error').textContent = res.message || 'Could not save';
     return;
   }
+  const savedCode = state.editingCode;
   $('edit-dialog').close();
   state.editingCode = null;
-  toast(`${state.editingCode} updated`);
+  toast(`${savedCode} updated`);
   await load(true);
 }
 
@@ -369,6 +402,7 @@ $('codes').addEventListener('click', async (event) => {
   const code = target.dataset.code;
   if (target.classList.contains('edit')) return openEdit(code);
   if (target.classList.contains('toggle')) return toggleCode(code, target.dataset.revoked === 'true');
+  if (target.classList.contains('effects')) return removeEffects(code, target.dataset.removed !== 'true');
   if (target.classList.contains('delete')) return deleteCode(code, target.dataset.used);
 });
 

@@ -428,24 +428,36 @@ class _LibraryScreenState extends State<LibraryScreen> {
     final choice = await showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
+      useSafeArea: true,
       builder: (c) => SafeArea(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           ListTile(
             leading: const Icon(Icons.audiotrack_outlined),
-            title: const Text('Import files (audio or video)'),
+            title: const Text('Import one file'),
             subtitle: const Text(
-                'Videos play as audio — nothing is copied or moved',
+                'Pick a song or a video. Videos play as audio.',
+                style: TextStyle(fontSize: 12)),
+            onTap: () => Navigator.pop(c, 'single'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.library_music_outlined),
+            title: const Text('Import several files'),
+            subtitle: const Text(
+                'Pick as many as you like. Only the newest 25 are added on '
+                'the free plan.',
                 style: TextStyle(fontSize: 12)),
             onTap: () => Navigator.pop(c, 'files'),
           ),
           ListTile(
             leading: const Icon(Icons.video_library_outlined),
-            title: const Text('Import a folder of videos'),
+            title: const Text('Import a folder'),
             subtitle: const Text(
-                'Every video in the folder becomes an audio track',
+                'Every audio and video in the folder. The newest 25 are added '
+                'on the free plan.',
                 style: TextStyle(fontSize: 12)),
             onTap: () => Navigator.pop(c, 'folder'),
           ),
+          const SizedBox(height: 6),
         ]),
       ),
     );
@@ -463,14 +475,16 @@ class _LibraryScreenState extends State<LibraryScreen> {
     }
 
     try {
-      final n = choice == 'files'
-          ? await importMediaFiles(context)
-          : await importMediaFolder(context);
+      final n = switch (choice) {
+        'single' => (await importMediaFile(context) == null ? 0 : 1),
+        'files' => await importMediaFiles(context),
+        _ => await importMediaFolder(context),
+      };
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(n == 0
             ? 'No audio or video files found there'
-            : 'Imported $n audios'),
+            : 'Imported $n ${n == 1 ? 'audio' : 'audios'}'),
         behavior: SnackBarBehavior.floating,
       ));
     } catch (e) {
@@ -495,7 +509,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     showModalBottomSheet(
       context: context,
       showDragHandle: true,
-      useSafeArea: false,
+      useSafeArea: true,
       isScrollControlled: true,
       builder: (_) => const AddReelSheet(),
     );
@@ -1868,11 +1882,15 @@ String _titleFromName(String name) => name
 /// Picks media over SAF and returns reference Tracks pointing at the
 /// content:// URI — videos play their own audio layer, and our delete guard
 /// never touches files outside the save root.
-Future<List<Track>> _pickMedia({required bool folder}) async {
+Future<List<Track>> _pickMedia({required bool folder, bool single = false}) async {
   List<dynamic> rows;
   try {
     rows = await _mediaChannel.invokeMethod<List<dynamic>>(
-            folder ? 'pickMediaFolder' : 'pickMediaFiles') ??
+            folder
+                ? 'pickMediaFolder'
+                : single
+                    ? 'pickMediaFile'
+                    : 'pickMediaFiles') ??
         const <dynamic>[];
   } on MissingPluginException {
     throw Exception('Media import is unavailable on this device.');
@@ -1887,6 +1905,7 @@ Future<List<Track>> _pickMedia({required bool folder}) async {
     final name = raw['name']?.toString() ?? '';
     final ext = _extensionOf(name);
     if (uri.isEmpty || !_mediaExtensions.contains(ext)) continue;
+    final modified = (raw['modified'] as num?)?.toInt() ?? 0;
     picked.add(Track(
       id: _trackId(),
       title: _titleFromName(name),
@@ -1894,7 +1913,10 @@ Future<List<Track>> _pickMedia({required bool folder}) async {
       path: uri,
       fileName: name,
       folderIds: const [],
-      addedAtMs: DateTime.now().millisecondsSinceEpoch,
+      // File timestamp, not import time: when a folder holds 200 clips and
+      // the free plan keeps 25, "latest" must mean newest file.
+      addedAtMs:
+          modified > 0 ? modified : DateTime.now().millisecondsSinceEpoch,
     ));
   }
   return picked;
@@ -1906,6 +1928,8 @@ int _addWithinCap(List<Track> picked) {
   var added = 0;
   for (final t in picked) {
     if (!Entitlements.I.canAddTracks(AppStore.I.tracks.length)) break;
+    // Two files called "Video from Instagram" must stay distinguishable.
+    t.title = AppStore.I.uniqueTitle(t.title);
     AppStore.I.addTrack(t);
     added++;
   }
@@ -1943,16 +1967,22 @@ Future<int> importMediaFolder([BuildContext? context]) async {
   return _importPicked(context, picked);
 }
 
-Future<Track?> importAudioFile([BuildContext? context]) async {
+/// Pick exactly one audio/video file and import it. Returns the Track when it
+/// was added, null when the picker was dismissed or the cap blocked it.
+Future<Track?> importMediaFile([BuildContext? context]) async {
   if (paywallIfAtTrackCap(context)) return null;
-  // Audio OR video, reference-imported over SAF (nothing copied): a video
-  // here simply plays its own audio layer. Used by Add reel's
-  // "Or import an audio file instead".
-  final picked = await _pickMedia(folder: false);
+  final picked = await _pickMedia(folder: false, single: true);
   if (picked.isEmpty) return null;
   if (context != null && !context.mounted) return null;
   final added = await _importPicked(context, picked);
   return added == 0 ? null : picked.first;
+}
+
+Future<Track?> importAudioFile([BuildContext? context]) async {
+  // Audio OR video, reference-imported over SAF (nothing copied): a video
+  // here simply plays its own audio layer. Used by Add reel's
+  // "Or import a file instead".
+  return importMediaFile(context);
 }
 
 /// Adds [picked], asking first when some are already in the library.
@@ -1972,6 +2002,9 @@ Future<int> _importPicked(BuildContext? context, List<Track> picked) async {
     if (key.isNotEmpty && !seen.add(key)) continue;
     unique.add(t);
   }
+  // Newest file first. The free cap takes a prefix of this list, so "the
+  // latest 25" stays true no matter what order the picker returned.
+  unique.sort((a, b) => b.addedAtMs.compareTo(a.addedAtMs));
 
   final dupes = unique
       .where((t) => store.trackByFileName(t.fileName) != null)

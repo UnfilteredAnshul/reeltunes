@@ -14,6 +14,7 @@ import 'entitlements.dart';
 import 'extraction_errors.dart';
 import 'extractor.dart';
 import 'library.dart';
+import 'library_sync.dart';
 import 'link_rules.dart';
 import 'models.dart';
 import 'player.dart';
@@ -161,7 +162,7 @@ class _AddReelSheetState extends State<AddReelSheet> {
         TextButton.icon(
           onPressed: () => importAudioFile(context),
           icon: const Icon(Icons.folder_open),
-          label: const Text('Or import an audio file instead'),
+          label: const Text('Or import a file instead'),
         ),
         const SizedBox(height: 4),
         FilledButton.icon(
@@ -287,15 +288,45 @@ class _AddReelSheetState extends State<AddReelSheet> {
       final failedUrl = url;
       if (!mounted) return;
       setState(() => state = _ExtractionState.idle);
-      showTopToast(context, "Can't download this one. Try another link.");
+      final msg = e.toString();
+      if (msg.contains('Folder access lost')) {
+        showTopToast(
+          context,
+          'Folder access was lost. Link your audios folder again to save downloads.',
+          error: true,
+          actionLabel: 'Link folder',
+          onAction: () async {
+            if (!context.mounted) return;
+            final relinked = await LibrarySync.reLinkFolder();
+            if (context.mounted && relinked != null) {
+              showTopToast(context, 'Folder linked. Try the download again.');
+            }
+          },
+        );
+        return;
+      }
+      // Always the same short sentence. The exact reason (and the technical
+      // text) lives in the guide, which the toast opens directly.
+      showTopToast(
+        context,
+        "Can't download this one, check the guide for the reason.",
+        error: true,
+        actionLabel: 'Guide',
+        onAction: () {
+          if (context.mounted) showGuideSheet(context);
+        },
+      );
       // TODO(dev-phase-over): restore the user-facing fallback:
       // Navigator.pop(context);
       // _onExtractionFailed(failedUrl);
+      debugPrint('failed link: $failedUrl');
     }
   }
 
   /// Shown whenever in-app extraction can't deliver: route to the web
   /// wrapper (pre-filled link) or import a file picked on-device.
+  // Kept for the end of the dev phase: the generic toast is intentional now.
+  // ignore: unused_element
   Future<void> _onExtractionFailed(String url) async {
     if (!mounted) return;
     showModalBottomSheet(
@@ -754,76 +785,214 @@ Future<void> showFolderMenu(BuildContext context, Folder f,
 // Guide
 // ---------------------------------------------------------------------------
 
-/// Plain-language tour of the app. Opened from Settings and from the bar on
-/// the home screen, so both entry points show the same thing.
-Future<void> showGuideSheet(BuildContext context) {
+/// Plain-language tour of the app, with a search box that also explains every
+/// download failure. Opened from Settings, from the home-screen bar, and from
+/// an error toast. Both entry points show the same thing.
+Future<void> showGuideSheet(BuildContext context, {String? query}) {
   return showModalBottomSheet<void>(
     context: context,
     showDragHandle: true,
     useSafeArea: true,
     isScrollControlled: true,
-    builder: (sheetCtx) => ConstrainedBox(
-      constraints: BoxConstraints(
-          maxHeight: MediaQuery.sizeOf(sheetCtx).height * 0.82),
-      child: ListView(
-        shrinkWrap: true,
-        padding: const EdgeInsets.fromLTRB(24, 0, 24, 32),
-        children: const [
-          Text('How ReelTunes works',
-              style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
-          SizedBox(height: 4),
-          Text('No account needed. Your audios stay on this phone.'),
-          SizedBox(height: 20),
-          _GuideStep(
-            Icons.link_rounded,
-            'Add from a link',
-            'Open the reel, tap Share, then pick ReelTunes. Or copy the link '
-                'and paste it into Add reel.',
-          ),
-          _GuideStep(
-            Icons.folder_open_rounded,
-            'Already have a file?',
-            'Tap the folder button. Pick a song or a video, or a whole folder. '
-                'Videos play as audio. Nothing gets copied.',
-          ),
-          _GuideStep(
-            Icons.playlist_add_rounded,
-            'Make a playlist',
-            'Tap New playlist and give it a name. Tap its chip at the top to '
-                'see only those songs. Tap All to see everything again.',
-          ),
-          _GuideStep(
-            Icons.search_rounded,
-            'Find a song',
-            'Tap the magnifier on the top bar and type part of the name.',
-          ),
-          _GuideStep(
-            Icons.tune_rounded,
-            'Sort and filter',
-            'Tap the sliders button. Sort on the left, date filter on the '
-                'right. You can use one or both.',
-          ),
-          _GuideStep(
-            Icons.play_circle_outline_rounded,
-            'Play',
-            'Tap a song to start. Tap the bar at the bottom for the full '
-                'player. Press and hold a song to rename, move, remove or '
-                'delete it.',
-          ),
-          _GuideStep(
-            Icons.folder_rounded,
-            'Your files stay yours',
-            'Everything you save sits in the audios folder. Drop a song in '
-                'with a file manager and it shows up here. Reinstall the app, '
-                'link the same folder, and your playlists come back.',
-          ),
-          SizedBox(height: 4),
-          Text('You can open this guide again from Settings.',
-              style: TextStyle(fontSize: 12)),
-        ],
-      ),
-    ),
+    builder: (sheetCtx) => _GuideSheet(initialQuery: query ?? ''),
   );
+}
+
+class _GuideEntry {
+  final IconData icon;
+  final String title;
+  final String body;
+  final List<String> keywords;
+  const _GuideEntry(this.icon, this.title, this.body,
+      [this.keywords = const []]);
+}
+
+const List<_GuideEntry> _guideSteps = [
+  _GuideEntry(
+    Icons.link_rounded,
+    'Add from a link',
+    'Open the reel, tap Share, then pick ReelTunes. Or copy the link and paste '
+        'it into Add reel.',
+    ['share', 'link', 'add', 'reel'],
+  ),
+  _GuideEntry(
+    Icons.folder_open_rounded,
+    'Already have a file?',
+    'Tap the folder button. Pick one file, several files, or a whole folder. '
+        'Videos play as audio. Nothing gets copied.',
+    ['import', 'file', 'folder', 'video', 'audio', 'multiple', 'single'],
+  ),
+  _GuideEntry(
+    Icons.playlist_add_rounded,
+    'Make a playlist',
+    'Tap New playlist and give it a name. Tap its chip at the top to see only '
+        'those songs. Tap All to see everything again.',
+    ['playlist', 'folder', 'organise', 'organize'],
+  ),
+  _GuideEntry(
+    Icons.search_rounded,
+    'Find a song',
+    'Tap the magnifier on the top bar and type part of the name.',
+    ['search', 'find', 'name'],
+  ),
+  _GuideEntry(
+    Icons.tune_rounded,
+    'Sort and filter',
+    'Tap the sliders button. Sort on the left, date filter on the right. You '
+        'can use one or both. The newest audio is always first after an import.',
+    ['sort', 'filter', 'newest', 'date'],
+  ),
+  _GuideEntry(
+    Icons.play_circle_outline_rounded,
+    'Play',
+    'Tap a song to start. Tap the bar at the bottom for the full player. Press '
+        'and hold a song to rename, move, remove or delete it. Playback also '
+        'appears in the notification shade and on the lock screen.',
+    ['play', 'player', 'notification', 'lock screen', 'rename'],
+  ),
+  _GuideEntry(
+    Icons.folder_rounded,
+    'Your files stay yours',
+    'Everything you save sits in the audios folder. Drop a song in with a file '
+        'manager and it shows up here. Reinstall the app, link the same folder, '
+        'and your playlists come back.',
+    ['files', 'storage', 'folder', 'reinstall', 'download'],
+  ),
+];
+
+/// Built from the shared catalog so the guide and the error handlers can never
+/// drift apart.
+List<_GuideEntry> get _guideDownloadErrors => [
+      for (final e in downloadErrorHelp)
+        _GuideEntry(Icons.error_outline_rounded, e.title, e.body, e.keywords),
+    ];
+
+class _GuideSheet extends StatefulWidget {
+  final String initialQuery;
+  const _GuideSheet({required this.initialQuery});
+  @override
+  State<_GuideSheet> createState() => _GuideSheetState();
+}
+
+class _GuideSheetState extends State<_GuideSheet> {
+  late final TextEditingController _search =
+      TextEditingController(text: widget.initialQuery);
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  bool _matches(_GuideEntry e, String q) {
+    if (q.isEmpty) return true;
+    if (e.title.toLowerCase().contains(q)) return true;
+    if (e.body.toLowerCase().contains(q)) return true;
+    return e.keywords.any((k) => k.contains(q));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final q = _search.text.trim().toLowerCase();
+    final steps = _guideSteps.where((e) => _matches(e, q)).toList();
+    final errors = _guideDownloadErrors.where((e) => _matches(e, q)).toList();
+    return ConstrainedBox(
+      constraints:
+          BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.86),
+      child: Padding(
+        padding:
+            EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('How ReelTunes works',
+                      style:
+                          TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 4),
+                  const Text('No account needed. Your audios stay on this phone.'),
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: _search,
+                    onChanged: (_) => setState(() {}),
+                    textInputAction: TextInputAction.search,
+                    decoration: InputDecoration(
+                      hintText: 'Search: private, 403, storage, import…',
+                      prefixIcon: const Icon(Icons.search, size: 20),
+                      isDense: true,
+                      suffixIcon: _search.text.isEmpty
+                          ? null
+                          : IconButton(
+                              tooltip: 'Clear',
+                              icon: const Icon(Icons.close, size: 18),
+                              onPressed: () {
+                                _search.clear();
+                                setState(() {});
+                              },
+                            ),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: ListView(
+                shrinkWrap: true,
+                padding: const EdgeInsets.fromLTRB(24, 4, 24, 32),
+                children: [
+                  if (steps.isNotEmpty) ...[
+                    for (final e in steps)
+                      _GuideStep(e.icon, e.title, e.body),
+                  ],
+                  if (errors.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      q.isEmpty ? 'If a download fails' : 'Download problems',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: scheme.primary,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    for (final e in errors)
+                      _GuideStep(e.icon, e.title, e.body),
+                  ],
+                  if (steps.isEmpty && errors.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 24),
+                      child: Text(
+                        'Nothing in the guide matches "${_search.text.trim()}". '
+                        'Try "private", "403", "storage" or "folder".',
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodyMedium
+                            ?.copyWith(color: scheme.onSurfaceVariant),
+                      ),
+                    ),
+                  if (q.isEmpty) ...[
+                    const SizedBox(height: 4),
+                    const Text('You can open this guide again from Settings.',
+                        style: TextStyle(fontSize: 12)),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _GuideStep extends StatelessWidget {
@@ -1312,7 +1481,9 @@ class _PaywallSheetState extends State<_PaywallSheet> {
 
   String _priceFor(String which) =>
       Billing.I.planView(which)?.priceString ??
-      (which == 'annual' ? '₹3000 / year' : '₹399 / month');
+      // Never invent a currency amount: Play localises the price per country,
+      // and a hard-coded rupee figure would be wrong everywhere else.
+      'See price in Google Play';
 
   Future<void> _buy() async {
     if (busy) return;
@@ -1764,6 +1935,95 @@ class _PlanCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// One-time "trial or free?" prompt shown after the audios folder is linked.
+/// Choosing free is final: the 7-day trial is forfeited on this install (and
+/// travels with the folder mirror, so a reinstall does not bring it back).
+Future<void> showTrialChoiceSheet(BuildContext context) {
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    useSafeArea: true,
+    isDismissible: false,
+    enableDrag: false,
+    builder: (sheetCtx) {
+      final scheme = Theme.of(sheetCtx).colorScheme;
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(children: [
+              Icon(Icons.auto_awesome_outlined, color: scheme.primary),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Try Pro free for 7 days?',
+                  style: Theme.of(sheetCtx)
+                      .textTheme
+                      .titleLarge
+                      ?.copyWith(fontWeight: FontWeight.w600),
+                ),
+              ),
+            ]),
+            const SizedBox(height: 12),
+            Text(
+              'Pro unlocks unlimited audios and playlists, custom looping, and '
+              'removes ads. You can also continue on the free plan right away.',
+              style: Theme.of(sheetCtx).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'The trial runs for 7 days. It does not set up a payment by '
+              'itself, and nothing is charged when it ends. Pro is only bought '
+              'if you choose a plan later.',
+              style: Theme.of(sheetCtx)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 20),
+            FilledButton(
+              onPressed: () async {
+                await Entitlements.I.startTrial();
+                if (!sheetCtx.mounted) return;
+                Navigator.pop(sheetCtx);
+                if (context.mounted) {
+                  showTopToast(context, '7-day trial started');
+                }
+              },
+              child: const Text('Start 7-day trial'),
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton(
+              onPressed: () async {
+                await Entitlements.I.declineTrial();
+                if (!sheetCtx.mounted) return;
+                Navigator.pop(sheetCtx);
+                if (context.mounted) {
+                  showTopToast(context,
+                      'Free plan. The trial will not be offered again.');
+                }
+              },
+              child: const Text('Continue free'),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Free keeps 25 audios and 2 playlists, with ads. Choosing free '
+              'forfeits the trial permanently.',
+              textAlign: TextAlign.center,
+              style: Theme.of(sheetCtx)
+                  .textTheme
+                  .labelSmall
+                  ?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ],
+        ),
+      );
+    },
+  );
 }
 
 /// Shown on launch/resume when the trial has 3 days and 1 day left. Each fires

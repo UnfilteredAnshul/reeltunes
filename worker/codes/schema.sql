@@ -17,6 +17,10 @@ CREATE TABLE IF NOT EXISTS codes (
   campaign     TEXT NOT NULL DEFAULT '',
   notes        TEXT NOT NULL DEFAULT '',
   revoked      INTEGER NOT NULL DEFAULT 0,
+  -- Owner pressed "Remove effects": every install that redeemed this code
+  -- drops the Pro it granted on its next launch. The code itself keeps its
+  -- redemption history; this flag only stops the grant.
+  effects_removed INTEGER NOT NULL DEFAULT 0,
   created_at   INTEGER NOT NULL
 );
 

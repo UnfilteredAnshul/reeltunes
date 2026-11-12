@@ -39,6 +39,19 @@ export default {
         if (request.method !== 'POST') return methodNotAllowed();
         return cors(await handleRedeem(request, env, ctx));
       }
+      // Public grant status: lets an install check whether the owner switched
+      // its code off. Only a boolean is exposed, never redemption data.
+      if (path === '/api/grant' && request.method === 'GET') {
+        const code = normalize(url.searchParams.get('code') ?? '');
+        if (!code) return json({ ok: false, effectsRemoved: false }, 400);
+        const row = await env.DB.prepare(
+          'SELECT effects_removed FROM codes WHERE code = ?',
+        ).bind(code).first();
+        return cors(json({
+          ok: true,
+          effectsRemoved: Number(row?.effects_removed) === 1,
+        }));
+      }
       if (path.startsWith('/api/admin/')) {
         const denied = requireAdmin(request, env);
         if (denied) return cors(denied);
@@ -278,6 +291,27 @@ async function handleAdmin(request, env, route, url) {
     return json({ ok: true, at: Date.now() });
   }
 
+  if (route.startsWith('codes/') && route.endsWith('/remove-effects')) {
+    if (request.method !== 'POST') return methodNotAllowed();
+    const raw = route.slice('codes/'.length, -'/remove-effects'.length);
+    const code = normalize(decodeURIComponent(raw));
+    if (!code) return json({ ok: false, message: 'Missing code' }, 400);
+    let body = {};
+    try {
+      body = await request.json();
+    } catch {
+      body = {};
+    }
+    const removed = body?.removed !== false;
+    const result = await env.DB.prepare(
+      'UPDATE codes SET effects_removed = ? WHERE code = ?',
+    ).bind(removed ? 1 : 0, code).run();
+    if (!result.meta?.changes) {
+      return json({ ok: false, message: 'Code not found' }, 404);
+    }
+    return json({ ok: true, code, effectsRemoved: removed });
+  }
+
   if (route.startsWith('codes/')) {
     const code = normalize(decodeURIComponent(route.slice('codes/'.length)));
     if (!code) return json({ ok: false, message: 'Missing code' }, 400);
@@ -431,6 +465,16 @@ async function patchCode(request, env, code) {
     sets.push('campaign = ?');
     values.push(body.campaign.trim().slice(0, 80));
   }
+  // Grant days can be edited after the code is live. It only changes what
+  // future redemptions receive; time already granted is never clawed back.
+  if (body?.days !== undefined) {
+    const days = Math.trunc(Number(body.days) || 0);
+    if (days < 1 || days > 3650) {
+      return { ok: false, message: 'Grant must be 1–3650 days' };
+    }
+    sets.push('grant_days = ?');
+    values.push(days);
+  }
   if (body?.maxUses !== undefined) {
     sets.push('max_uses = ?');
     values.push(Math.max(0, Math.trunc(Number(body.maxUses) || 0)));
@@ -514,6 +558,7 @@ function mapCode(row) {
     campaign: row.campaign ?? '',
     notes: row.notes ?? '',
     revoked,
+    effectsRemoved: Number(row.effects_removed) === 1,
     createdAtMs: Number(row.created_at) || 0,
     redemptionCount: Number(row.redemption_count) || 0,
     lastRedeemedAtMs: row.last_redeemed_at == null

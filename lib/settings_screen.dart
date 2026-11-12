@@ -134,6 +134,15 @@ class SettingsScreen extends StatelessWidget {
                 value: store.playDuringCalls,
                 onChanged: (v) => store.setPlayDuringCalls(v),
               ),
+              SwitchListTile(
+                title: const Text('Let player survive recent swipe'),
+                subtitle: const Text(
+                    'On = music and the notification keep running when you swipe '
+                        'ReelTunes away from recents. Off = everything stops. '
+                        'Default is off; whatever you pick is absolute.'),
+                value: store.surviveRecentsSwipe,
+                onChanged: (v) => store.setSurviveRecentsSwipe(v),
+              ),
               const _Section('Privacy'),
               const _AdPrivacyTile(),
               ListTile(

@@ -47,19 +47,43 @@ class _ReelTuneAppState extends State<ReelTuneApp> {
 
   @override
   Widget build(BuildContext context) {
-    final store = AppStore.I;
-    return MaterialApp(
-      title: 'ReelTunes',
-      debugShowCheckedModeBanner: false,
-      scaffoldMessengerKey: rootMessengerKey,
-      theme: _theme(Brightness.light),
-      darkTheme: _theme(Brightness.dark),
-      themeMode: switch (store.themeMode) {
-        AppThemeMode.system => ThemeMode.system,
-        AppThemeMode.light => ThemeMode.light,
-        AppThemeMode.dark => ThemeMode.dark,
+    // Rebuild on every AppStore change: themeMode lives there, and switching
+    // light/dark from Settings must apply immediately (no relaunch).
+    return ListenableBuilder(
+      listenable: AppStore.I,
+      builder: (context, _) {
+        final store = AppStore.I;
+        return MaterialApp(
+          title: 'ReelTunes',
+          debugShowCheckedModeBanner: false,
+          scaffoldMessengerKey: rootMessengerKey,
+          theme: _theme(Brightness.light),
+          darkTheme: _theme(Brightness.dark),
+          themeMode: switch (store.themeMode) {
+            AppThemeMode.system => ThemeMode.system,
+            AppThemeMode.light => ThemeMode.light,
+            AppThemeMode.dark => ThemeMode.dark,
+          },
+          // Auto-hiding navigation bars report a smaller `padding.bottom`
+          // than `viewPadding.bottom` while they are off-screen. Bottom
+          // sheets and the player then render underneath the bar when it
+          // slides back in. Keep the larger of the two as the safe inset.
+          builder: (context, child) {
+            final mq = MediaQuery.of(context);
+            final bottom = mq.padding.bottom > mq.viewPadding.bottom
+                ? mq.padding.bottom
+                : mq.viewPadding.bottom;
+            if (bottom == mq.padding.bottom) return child!;
+            return MediaQuery(
+              data: mq.copyWith(
+                padding: mq.padding.copyWith(bottom: bottom),
+              ),
+              child: child!,
+            );
+          },
+          home: const RootScreen(),
+        );
       },
-      home: const RootScreen(),
     );
   }
 
@@ -120,23 +144,21 @@ class _RootScreenState extends State<RootScreen>
         );
       }
       if (mounted) setState(() => ready = true);
+      // Folder is set up: ask once whether to start the 7-day trial or stay
+      // free. Choosing free permanently forfeits the trial.
+      await _maybeTrialChoice();
       // A folder whose grant was dropped makes every audio unplayable; ask for
       // the same folder right away instead of failing on the first tap.
       unawaited(_maybePromptRelink());
+      // A code the owner switched off must stop paying for Pro, even if this
+      // install redeemed it days ago.
+      unawaited(PromoEngine.I.syncGrantEffects());
       // App-open ad (Free only, max once per 4 h). It waits briefly for the
       // preloaded unit and silently gives up when there is no fill.
       unawaited(Ads.I.maybeShowAppOpen());
       // 3-day / 1-day nudge, once each. Never stacked on the first-run sheet.
       if (AppStore.I.audiosLinked) _maybeTrialReminder();
     });
-  }
-
-  /// Configures RevenueCat once, then refreshes the entitlement. Safe no-op
-  /// when the build has no store key. Everything gated reads `Entitlements`,
-  /// which is a `ChangeNotifier`, so the UI corrects itself.
-  Future<void> _syncStore() async {
-    // Already awaited in initState before Ads.I.init() so ad events are
-    // captured from the first load.
   }
 
   /// One-tap repair for a lapsed SAF grant. Android drops the persisted folder
@@ -191,6 +213,14 @@ class _RootScreenState extends State<RootScreen>
     await showTrialReminderSheet(context, due);
   }
 
+  /// One-time "trial or free?" choice after the audios folder is set up.
+  Future<void> _maybeTrialChoice() async {
+    if (!mounted) return;
+    if (AppStore.I.audiosLinked == false) return;
+    if (!Entitlements.I.trialDecisionNeeded) return;
+    await showTrialChoiceSheet(context);
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Coming back from the file manager / another app: files may have been
@@ -202,7 +232,9 @@ class _RootScreenState extends State<RootScreen>
       LibrarySync.refreshState().then((_) async {
         await LibrarySync.sync();
         await _maybeTrialReminder();
+        await _maybeTrialChoice();
         await _maybePromptRelink();
+        await PromoEngine.I.syncGrantEffects();
       });
     }
   }
@@ -240,7 +272,7 @@ class _RootScreenState extends State<RootScreen>
     showModalBottomSheet(
       context: context,
       showDragHandle: true,
-      useSafeArea: false,
+      useSafeArea: true,
       isScrollControlled: true,
       builder: (_) => AddReelSheet(initialUrl: match),
     );

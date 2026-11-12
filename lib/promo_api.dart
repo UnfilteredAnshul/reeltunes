@@ -73,6 +73,30 @@ class PromoApi {
     return _result(json);
   }
 
+  /// True when the owner pressed "Remove effects" for [code]. A missing code
+  /// or an old backend answers false, so the app fails open (keeps the grant).
+  Future<bool> grantEffectsRemoved(String code) async {
+    final json = await _send(
+      'GET',
+      '/api/grant?code=${Uri.encodeComponent(code)}',
+    );
+    return json['effectsRemoved'] == true;
+  }
+
+  Future<PromoApiResult> removeEffects(
+    String token,
+    String code, {
+    bool removed = true,
+  }) async {
+    final json = await _send(
+      'POST',
+      '/api/admin/codes/${Uri.encodeComponent(code)}/remove-effects',
+      token: token,
+      body: {'removed': removed},
+    );
+    return _result(json);
+  }
+
   Future<bool> checkToken(String token) async {
     final json = await _send('GET', '/api/admin/session', token: token);
     return json['ok'] == true;

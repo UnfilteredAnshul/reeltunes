@@ -1,10 +1,14 @@
 package com.buildwithanshul.reeltunes
 
 import android.app.Activity
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
 import android.provider.DocumentsContract
+import android.provider.MediaStore
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
@@ -38,6 +42,11 @@ class FolderBridge(
                 when (call.method) {
                     "state" -> result.success(stateMap())
                     "probe" -> runAsync(result) { probe() }
+                    "ensureDefault" -> runAsync(result) { ensureDefaultFolder() }
+                    "exists" -> {
+                        val uri = call.argument<String>("uri") ?: ""
+                        runAsync(result) { exists(uri) }
+                    }
                     "link" -> launchLink(
                         result,
                         call.argument<Boolean>("preferDefault") == true
@@ -97,12 +106,14 @@ class FolderBridge(
                     Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
                     Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
             )
-            // "Use default folder": open the picker already parked on
-            // Download, and on ReelTune Audios when it exists.
-            if (preferDefault && android.os.Build.VERSION.SDK_INT >= 26) {
+            // "Use default folder": create ReelTune Audios if it is missing,
+            // then open the picker already INSIDE it. The user only has to
+            // tap "Use this folder".
+            if (preferDefault && Build.VERSION.SDK_INT >= 26) {
+                val ready = ensureDefaultFolder()
                 putExtra(
                     DocumentsContract.EXTRA_INITIAL_URI,
-                    defaultFolderUri()
+                    defaultFolderUri(ready)
                 )
             }
         }
@@ -310,14 +321,13 @@ class FolderBridge(
         val parentId = ensureDir(treeUri, subdir)
         val parentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, parentId)
 
-        val existing = findChild(treeUri, parentId, name, dir = false)
-        if (existing != null) {
-            deleteById(treeUri, existing)
-        }
+        // Never overwrite: a second "Video from Instagram" becomes
+        // "Video from Instagram 2". The library keeps both files.
+        val finalName = uniqueChildName(treeUri, parentId, name)
 
-        val mime = mimeFor(name)
+        val mime = mimeFor(finalName)
         val docUri = DocumentsContract.createDocument(
-            context.contentResolver, parentUri, mime, name
+            context.contentResolver, parentUri, mime, finalName
         ) ?: return null
 
         context.contentResolver.openOutputStream(docUri, "w")?.use { out ->
@@ -327,9 +337,22 @@ class FolderBridge(
         val id = DocumentsContract.getDocumentId(docUri)
         return mapOf(
             "uri" to DocumentsContract.buildDocumentUriUsingTree(treeUri, id).toString(),
-            "name" to name,
+            "name" to finalName,
             "size" to source.length(),
         )
+    }
+
+    /** "Song.m4a" exists -> "Song 2.m4a", so saves never overwrite. */
+    private fun uniqueChildName(treeUri: Uri, parentId: String, name: String): String {
+        if (findChild(treeUri, parentId, name, dir = false) == null) return name
+        val dot = name.lastIndexOf('.')
+        val base = if (dot > 0) name.substring(0, dot) else name
+        val ext = if (dot > 0) name.substring(dot) else ""
+        var index = 2
+        while (findChild(treeUri, parentId, "$base $index$ext", dir = false) != null) {
+            index++
+        }
+        return "$base $index$ext"
     }
 
     private fun ensureDir(treeUri: Uri, subdir: String?): String {
@@ -516,13 +539,86 @@ class FolderBridge(
     }
 
     /**
-     * Document URI the picker should start on: Download, where the app folder
-     * lives (resolveRoot creates / steps into ReelTune Audios from there).
+     * Document URI the picker should start on: ReelTune Audios when it exists
+     * (or was just created), otherwise Download (resolveRoot then steps into
+     * the app folder).
+     *
+     * The existence check must come from [ensureDefaultFolder], not from
+     * File.isDirectory: Android 11+ hides Download from raw file access even
+     * when the folder is there.
      */
-    private fun defaultFolderUri(): Uri = DocumentsContract.buildDocumentUri(
-        "com.android.externalstorage.documents",
-        "primary:Download"
-    )
+    private fun defaultFolderUri(folderReady: Boolean): Uri {
+        val id = if (folderReady) {
+            "primary:Download/$APP_FOLDER"
+        } else {
+            "primary:Download"
+        }
+        return DocumentsContract.buildDocumentUri(
+            "com.android.externalstorage.documents",
+            id,
+        )
+    }
+
+    /**
+     * Creates `Downloads/ReelTune Audios` ahead of the picker.
+     *
+     * Android 11+ refuses raw mkdirs() in Download, so on scoped storage the
+     * directory is created through MediaStore with one tiny hidden marker
+     * (".reeltune"). The marker keeps the folder from disappearing and is
+     * skipped by the scanner. Android 9 and older can just mkdirs() it.
+     */
+    private fun ensureDefaultFolder(): Boolean {
+        val legacy = File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+            APP_FOLDER,
+        )
+        if (legacy.isDirectory) return true
+        if (Build.VERSION.SDK_INT < 29) {
+            return try {
+                legacy.mkdirs() || legacy.isDirectory
+            } catch (_: Exception) {
+                false
+            }
+        }
+        return try {
+            // Already created on an earlier run: do not add a second marker.
+            val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
+            val markerExists = context.contentResolver.query(
+                collection,
+                arrayOf(MediaStore.MediaColumns._ID),
+                "${MediaStore.MediaColumns.RELATIVE_PATH} = ? AND " +
+                    "${MediaStore.MediaColumns.DISPLAY_NAME} = ?",
+                arrayOf("${Environment.DIRECTORY_DOWNLOADS}/$APP_FOLDER/", ".reeltune"),
+                null,
+            )?.use { it.moveToFirst() } ?: false
+            if (markerExists) return true
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, ".reeltune")
+                put(MediaStore.MediaColumns.MIME_TYPE, "application/octet-stream")
+                put(
+                    MediaStore.MediaColumns.RELATIVE_PATH,
+                    "${Environment.DIRECTORY_DOWNLOADS}/$APP_FOLDER",
+                )
+            }
+            context.contentResolver.insert(collection, values) != null ||
+                legacy.isDirectory
+        } catch (_: Exception) {
+            legacy.isDirectory
+        }
+    }
+
+    /** Cheap "does this content URI still resolve" check. */
+    private fun exists(uriString: String): Boolean = try {
+        context.contentResolver.query(
+            Uri.parse(uriString),
+            arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID),
+            null,
+            null,
+            null,
+        )?.use { it.moveToFirst() } ?: false
+    } catch (_: Exception) {
+        false
+    }
 
     companion object {
         const val CHANNEL = "com.buildwithanshul.reeltunes/folder"

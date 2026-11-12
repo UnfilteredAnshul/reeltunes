@@ -87,6 +87,13 @@ input:focus, select:focus { border-color: var(--accent); }
   letter-spacing: -0.1px;
 }
 
+.field-hint {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  margin: 6px 0 0;
+}
+
 .fields-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .toggle-field {
   display: flex;
@@ -215,6 +222,17 @@ td th { color: var(--text-secondary); }
   border: 1px solid var(--line);
   color: var(--warn);
   background: rgba(255, 214, 10, 0.08);
+}
+
+.fx {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  padding: 2px 7px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 69, 58, 0.35);
+  color: var(--bad);
+  background: rgba(255, 69, 58, 0.08);
 }
 
 .empty { padding: 18px 4px; color: var(--text-secondary); text-align: center; }

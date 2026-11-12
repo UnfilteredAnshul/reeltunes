@@ -450,6 +450,29 @@ class PromoEngine extends ChangeNotifier {
 
   // ---- admin (the in-app dashboard) --------------------------------------
 
+  /// Applies the owner's "Remove effects" switch to this install.
+  ///
+  /// Only a code grant can be removed; a Play purchase and a live trial are
+  /// untouched. Called on launch/resume, never polled: offline keeps the grant
+  /// until the next check.
+  Future<void> syncGrantEffects() async {
+    final code = Entitlements.I.codeGrantCode;
+    if (code == null || code.isEmpty) return;
+    if (code == masterCode || code == resetCode) return;
+    try {
+      final removed = await PromoApi.I.grantEffectsRemoved(code);
+      if (!removed) return;
+      // Re-read after the await: the user may have redeemed a different code
+      // in the meantime.
+      if (Entitlements.I.codeGrantCode != code) return;
+      await Entitlements.I.clearCodeGrant();
+      await LibrarySync.mirror();
+      notifyListeners();
+    } on PromoApiException {
+      // Offline: keep Pro. The next launch/resume checks again.
+    }
+  }
+
   Future<void> unlockAdmin(bool value) async {
     _adminUnlocked = value;
     await _prefs?.setBool('adminUnlocked', value);
