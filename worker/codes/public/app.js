@@ -12,6 +12,7 @@ const state = {
   filter: '',
   timer: null,
   editingCode: null,
+  theme: localStorage.getItem('reeltunes_theme') || 'light',
 };
 
 const $ = (id) => document.getElementById(id);
@@ -51,6 +52,22 @@ async function api(path, options = {}) {
     throw new Error('unauthorised');
   }
   return data;
+}
+
+function applyTheme() {
+  if (state.theme === 'dark') {
+    document.body.classList.add('dark');
+    $('theme-toggle').textContent = '☀️';
+  } else {
+    document.body.classList.remove('dark');
+    $('theme-toggle').textContent = '🌙';
+  }
+}
+
+function toggleTheme() {
+  state.theme = state.theme === 'light' ? 'dark' : 'light';
+  localStorage.setItem('reeltunes_theme', state.theme);
+  applyTheme();
 }
 
 function showLogin(message = '') {
@@ -135,7 +152,12 @@ function renderStats() {
 function visibleCodes() {
   const q = state.query.trim().toUpperCase().replace(/\s/g, '');
   return state.codes.filter((c) => {
-    if (q && !c.code.includes(q)) return false;
+    if (q) {
+      const haystack = `${c.code} ${c.campaign ?? ''} ${c.notes ?? ''}`
+        .toUpperCase()
+        .replace(/\s/g, '');
+      if (!haystack.includes(q)) return false;
+    }
     if (state.filter && c.state !== state.filter) return false;
     return true;
   });
@@ -365,6 +387,7 @@ $('login-form').addEventListener('submit', (event) => {
   if (token) login(token).catch(() => showLogin('Could not reach the server'));
 });
 
+$('theme-toggle').addEventListener('click', () => toggleTheme());
 $('signout').addEventListener('click', () => signOut());
 $('refresh').addEventListener('click', () => load());
 $('search').addEventListener('input', (event) => {
@@ -414,6 +437,7 @@ $('edit-cancel').addEventListener('click', () => {
 $('edit-form').addEventListener('submit', saveEdit);
 
 // boot
+applyTheme();
 if (state.token) {
   login(state.token).catch(() => showLogin('Could not reach the server'));
 } else {

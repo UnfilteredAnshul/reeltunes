@@ -309,6 +309,33 @@
         .fields-row { grid-template-columns: 1fr; gap: 0; }
         .stat-value { font-size: 18px; }
       }
+
+      /* Dark mode overrides */
+      body.dark {
+        --bg: #000000;
+        --panel: #0a0a0a;
+        --line: #2a2a2a;
+        --separator: #2a2a2a;
+        --text: #ffffff;
+        --text-secondary: #8e8e93;
+        --text-tertiary: #636366;
+        --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+      }
+      body.dark html, body.dark body { background: var(--bg); color: var(--text); }
+      body.dark .topbar { background: rgba(0, 0, 0, 0.8); border-bottom-color: var(--line); }
+      body.dark .panel { background: var(--panel); border-color: var(--line); }
+      body.dark .stat { background: var(--panel); border-color: var(--line); }
+      body.dark input, body.dark select { background: #141414; border-color: var(--line); color: var(--text); }
+      body.dark tbody tr:hover { background: rgba(255,255,255,0.02); }
+      body.dark th { background: rgba(255,255,255,0.02); }
+
+      /* Table overflow fixes: keep code cell and actions on one line */
+      td.code { white-space: nowrap; }
+      td.code > div { display: flex; align-items: baseline; gap: 6px; flex-wrap: nowrap; }
+      td.code span, .milestone, .fx { white-space: nowrap; }
+      td.th-actions, td:last-child { white-space: nowrap; }
+      td button.btn-ghost.small { flex-shrink: 0; padding: 6px 10px; font-size: 12px; white-space: nowrap; }
+      .table-wrap { overflow-x: auto; }
     </style>
   </head>
   <body>
@@ -337,6 +364,7 @@
         <div class="topbar-actions">
           <span id="sync" class="muted small">syncing</span>
           <button id="refresh" class="btn-ghost" type="button">Refresh</button>
+          <button id="theme-toggle" class="btn-ghost" type="button" aria-label="Toggle dark mode">🌙</button>
           <button id="signout" class="btn-ghost" type="button">Sign out</button>
         </div>
       </header>
