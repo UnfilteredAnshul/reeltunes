@@ -256,6 +256,7 @@ flutter build appbundle --release --dart-define=ADMOB_TEST_ADS=true
 
 ## Code backend (Cloudflare Worker + D1)
 - Worker `reeltunes-codes`, source `worker/codes/`, deployed at https://reeltunes-codes.buildwise.workers.dev. Dashboard is the same URL (static `public/` assets), admin token typed once into the browser.
+- Dashboard: dark mode toggle in nav bar (persisted to localStorage), search covers code / campaign / notes, code table rows keep code cell + action buttons on one line (no wrapping overflow).
 - D1 database `reeltunes-codes` (`52fe2891-0753-4787-95df-8a3d11c04ad7`), schema `worker/codes/schema.sql`: `codes`, `redemptions`, `redeem_attempts`, `master_devices`.
 - App transport `lib/promo_api.dart`; rules/cache in `lib/promo.dart`. `PromoEngine.redeem()` calls the Worker first and only falls back to locally created codes when offline. Server codes are never cached as strings, so revocation cannot be replayed offline.
 - Secrets: `ADMIN_TOKEN` (admin routes) and optional `MASTER_CODE` (lifetime Pro only for devices in `master_devices`). The admin token is **not** in the APK; it is pasted into Settings → Code dashboard → Connect.
