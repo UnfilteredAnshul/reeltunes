@@ -15,8 +15,11 @@ import 'models.dart';
 import 'notification_service.dart';
 import 'player.dart';
 import 'promo.dart';
+import 'settings_screen.dart';
 import 'sheets.dart';
 import 'top_toast.dart';
+import 'home_screen.dart';
+import 'smart_loop_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -103,6 +106,7 @@ class RootScreen extends StatefulWidget {
 class _RootScreenState extends State<RootScreen>
     with WidgetsBindingObserver {
   bool ready = false;
+  int _selectedIndex = 0;
   bool _relinkPromptShown = false;
 
   @override
@@ -247,7 +251,45 @@ class _RootScreenState extends State<RootScreen>
 
   @override
   Widget build(BuildContext context) {
-    return ready ? const LibraryScreen() : const _SplashScreen();
+    if (!ready) return const _SplashScreen();
+    final screens = [
+      const HomeScreen(),
+      const LibraryScreen(),
+      const SearchScreen(),
+      const SettingsScreen(),
+    ];
+    return Scaffold(
+      body: IndexedStack(index: _selectedIndex, children: screens),
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _selectedIndex,
+        onTap: (i) => setState(() => _selectedIndex = i),
+        type: BottomNavigationBarType.fixed,
+        selectedItemColor: Theme.of(context).colorScheme.primary,
+        unselectedItemColor: Theme.of(context).colorScheme.onSurfaceVariant,
+        items: const [
+          BottomNavigationBarItem(
+            icon: Icon(Icons.home_outlined),
+            activeIcon: Icon(Icons.home),
+            label: 'Home',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.library_music_outlined),
+            activeIcon: Icon(Icons.library_music),
+            label: 'Library',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.search),
+            activeIcon: Icon(Icons.search),
+            label: 'Search',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.more_horiz),
+            activeIcon: Icon(Icons.more_horiz),
+            label: 'More',
+          ),
+        ],
+      ),
+    );
   }
 
   /// After a share from YouTube / Instagram / TikTok: pick up the shared
@@ -276,6 +318,15 @@ class _RootScreenState extends State<RootScreen>
       isScrollControlled: true,
       builder: (_) => AddReelSheet(initialUrl: match),
     );
+  }
+}
+
+/// Simple search screen — opens Library with search pre-focused.
+class SearchScreen extends StatelessWidget {
+  const SearchScreen({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return const LibraryScreen();
   }
 }
 

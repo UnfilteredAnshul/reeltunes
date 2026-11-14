@@ -1,13 +1,13 @@
 package com.buildwithanshul.reeltunes
 
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.net.Uri
 import android.os.Bundle
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
-import androidx.preference.PreferenceManager
 import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -358,7 +358,7 @@ class MainActivity : AudioServiceActivity() {
         // absolute: off (default) stops playback and kills the notification,
         // on lets it survive the swipe.
         if (!isChangingConfigurations && !leavingWithBack) {
-            val prefs: SharedPreferences = PreferenceManager.getDefaultSharedPreferences(this)
+            val prefs: SharedPreferences = getSharedPreferences("${packageName}_preferences", Context.MODE_PRIVATE)
             val survive = prefs.getBoolean("surviveRecentsSwipe", false)
             if (!survive) {
                 clearMediaNotification()

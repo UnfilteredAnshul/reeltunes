@@ -34,6 +34,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
   Timer? _collapseTimer;
   DateTime _nextNudge = DateTime.now().add(const Duration(seconds: 7));
   bool _importExpanded = false;
+  String _filter = 'all';
 
   /// Rewarded ad in flight (disables the gold FAB so a double tap cannot open
   /// two full-screen ads).
@@ -119,30 +120,17 @@ class _LibraryScreenState extends State<LibraryScreen> {
         // immediately.
         listenable: Listenable.merge([store, Entitlements.I, CoinWallet.I]),
         builder: (context, _) {
+        final store = AppStore.I;
+        final scheme = Theme.of(context).colorScheme;
         final selected = store.selectedFolderId;
         return Scaffold(
+          backgroundColor: scheme.surface,
           appBar: AppBar(
-            title: _searchOpen
-                ? TextField(
-                    controller: _searchCtrl,
-                    autofocus: true,
-                    textInputAction: TextInputAction.search,
-                    decoration: const InputDecoration(
-                      hintText: 'Search by name',
-                      border: InputBorder.none,
-                    ),
-                    onChanged: (v) => AppStore.I.setSearchQuery(v),
-                  )
-                : const Text('ReelTunes'),
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            title: const Text('Library',
+                style: TextStyle(fontSize: 28, fontWeight: FontWeight.w700)),
             actions: [
-              IconButton(
-                tooltip: _searchOpen ? 'Close search' : 'Search',
-                icon: Icon(_searchOpen ? Icons.close : Icons.search),
-                onPressed: _toggleSearch,
-              ),
-              // Free tier only: coin shop + gold balance beside search.
-              // Pro / trial hide them; a coin purchase does not change the
-              // plan, so they remain while a 24 h ad-free window runs.
               if (Entitlements.I.shopAvailable) ...[
                 IconButton(
                   tooltip: 'Coin shop',
@@ -160,63 +148,107 @@ class _LibraryScreenState extends State<LibraryScreen> {
               ),
             ],
           ),
-          // Normal mode: import locally or add via link. While rearranging
-          // the FAB becomes the Save action so it is always on screen, even
-          // when the banner scrolled away.
-          floatingActionButton: store.anyArranging
-              ? FloatingActionButton.extended(
-                  heroTag: 'saveOrder',
-                  onPressed: () => store.stopArranging(),
-                  icon: const Icon(Icons.check),
-                  label: const Text('Save order'),
-                )
-              : SizedBox(
-                  // The pill grows to the left inside a fixed-width slot, so
-                  // the Add reel button underneath never shifts while the
-                  // import button is animating.
-                  width: _ImportFab.expandedWidth,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      if (Entitlements.I.shopAvailable) ...[
-                        _WatchAdFab(
-                          expanded: _importExpanded,
-                          busy: _adBusy,
-                          onPressed: _watchAd,
-                        ),
-                        const SizedBox(height: 12),
-                      ],
-                      _ImportFab(
-                        expanded: _importExpanded,
-                        onPressed: _openImportSheet,
-                      ),
-                      const SizedBox(height: 12),
-                      FloatingActionButton.extended(
-                        heroTag: 'addReel',
-                        onPressed: _openAddReel,
-                        label: const Text('Add reel'),
-                        icon: const Icon(Icons.link),
-                      ),
-                    ],
-                  ),
-                ),
-          // Free-tier banner (slot B in docs/ads.md) sits directly above the
-          // mini bar and disappears for Pro. The bar itself is always mounted:
-          // it shows the playing track, else the last audio played (persisted
-          // across launches), else an idle row.
-          bottomNavigationBar: const Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [AdBanner(), MiniBar()],
-          ),
           body: CustomScrollView(
             slivers: [
+              // Search bar (always visible, like screenshot 2)
+              SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: scheme.surfaceContainerHighest.withOpacity(0.3),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: TextField(
+                        controller: _searchCtrl,
+                        autofocus: _searchOpen,
+                        textInputAction: TextInputAction.search,
+                        decoration: InputDecoration(
+                          hintText: 'Search your sounds…',
+                          hintStyle: TextStyle(
+                              color: scheme.onSurfaceVariant, fontSize: 14),
+                          prefixIcon: Icon(Icons.search,
+                              color: scheme.onSurfaceVariant, size: 20),
+                          suffixIcon: _searchCtrl.text.isNotEmpty
+                              ? IconButton(
+                                  icon: const Icon(Icons.clear, size: 20),
+                                  onPressed: () {
+                                    _searchCtrl.clear();
+                                    AppStore.I.setSearchQuery('');
+                                  },
+                                )
+                              : null,
+                          border: InputBorder.none,
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 14),
+                        ),
+                        onChanged: (v) => AppStore.I.setSearchQuery(v),
+                      ),
+                    ),
+                  ),
+                ),
+              // Filter chips (All / Recently Added / Playlists)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+                  child: Row(children: [
+                    FilterChip(
+                      label: const Text('All'),
+                      selected: _filter == 'all',
+                      onSelected: (v) => setState(() => _filter = 'all'),
+                      showCheckmark: false,
+                      selectedColor: scheme.primary,
+                      labelStyle: TextStyle(
+                          color: _filter == 'all'
+                              ? Colors.white
+                              : scheme.onSurfaceVariant,
+                          fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(width: 10),
+                    FilterChip(
+                      label: const Text('Recently Added'),
+                      selected: _filter == 'recent',
+                      onSelected: (v) => setState(() => _filter = 'recent'),
+                      showCheckmark: false,
+                      selectedColor: scheme.primary,
+                      labelStyle: TextStyle(
+                          color: _filter == 'recent'
+                              ? Colors.white
+                              : scheme.onSurfaceVariant,
+                          fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(width: 10),
+                    FilterChip(
+                      label: const Text('Playlists'),
+                      selected: _filter == 'playlists',
+                      onSelected: (v) => setState(() => _filter = 'playlists'),
+                      showCheckmark: false,
+                      selectedColor: scheme.primary,
+                      labelStyle: TextStyle(
+                          color: _filter == 'playlists'
+                              ? Colors.white
+                              : scheme.onSurfaceVariant,
+                          fontWeight: FontWeight.w600),
+                    ),
+                    const Spacer(),
+                    IconButton(
+                      tooltip: 'Sort & filter',
+                      icon: const Icon(Icons.tune),
+                      onPressed: () => showSortFilterSheet(context),
+                    ),
+                  ]),
+                ),
+              ),
+              // Folder strip (playlists without emojis)
+              if (store.folders.isNotEmpty)
+                SliverToBoxAdapter(
+                  child: _FolderStrip(),
+                ),
               if (store.anyArranging)
                 SliverToBoxAdapter(
                     child: _RearrangeBanner(folders: store.arrangingFolders)),
               if (!store.guideBannerDismissed)
                 const SliverToBoxAdapter(child: _GuideBar()),
-              SliverToBoxAdapter(child: _FolderStrip()),
               if (store.folders.isNotEmpty)
                 SliverPadding(
                   padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
@@ -243,8 +275,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
                                       .colorScheme
                                       .onSurfaceVariant)),
                       const Spacer(),
-                      // A collapsed section has nothing to lay out, so the
-                      // layout switch would only be a dead control.
                       if (store.playlistsExpanded)
                         _ViewToggle(
                             value: store.folderView,
@@ -253,10 +283,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
                   ),
                 ),
               if (store.playlistsExpanded && store.folderView == ViewMode.grid)
-                // NOT const: `const` instances are identical across rebuilds,
-                // so Flutter skips them and the audio counts / newly created
-                // playlists only refreshed when the section was collapsed and
-                // expanded again.
                 _FoldersGrid()
               else if (store.playlistsExpanded) ...[
                 _FoldersList(),
@@ -304,19 +330,19 @@ class _LibraryScreenState extends State<LibraryScreen> {
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                   sliver: SliverToBoxAdapter(
                     child: Material(
-                      color: Theme.of(context).colorScheme.secondaryContainer,
-                      borderRadius: BorderRadius.circular(12),
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(12),
-                        onTap: () => showPaywallSheet(context,
-                            reason:
-                                'Free tier holds ${Entitlements.I.maxTracks} audios'),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 10),
-                          child: Row(children: [
-                            Icon(Icons.lock_outline,
-                                size: 18,
+                            color: Theme.of(context).colorScheme.secondaryContainer,
+                            borderRadius: BorderRadius.circular(12),
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(12),
+                              onTap: () => showPaywallSheet(context,
+                                  reason:
+                                      'Free tier holds ${Entitlements.I.maxTracks} audios'),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 14, vertical: 10),
+                                child: Row(children: [
+                                  Icon(Icons.lock_outline,
+                                      size: 18,
                                 color: Theme.of(context)
                                     .colorScheme
                                     .onSecondaryContainer),
@@ -627,36 +653,42 @@ class _FolderStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final store = AppStore.I;
+    final scheme = Theme.of(context).colorScheme;
     final folders = store.visibleFolders;
-    final chips = <(String?, String, String)>[
-      (null, 'All', '🎧'),
-      ...folders.map((f) => (f.id, f.name, f.emoji)),
-      (null, 'New playlist', '➕'),
-    ];
     return SizedBox(
       height: 48,
       child: ListView(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         children: [
-          for (var i = 0; i < chips.length; i++)
+          // All audios chip
+          _FilterChipWrap(
+            label: 'All audios',
+            selected: store.selectedFolderId == null,
+            onTap: () => store.selectFolder(null),
+          ),
+          const SizedBox(width: 8),
+          // Playlist chips (no emojis)
+          for (final f in folders)
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4),
+              padding: const EdgeInsets.only(right: 8),
               child: _FilterChipWrap(
-                label: '${chips[i].$3} ${chips[i].$2}',
-                selected: i != chips.length - 1 &&
-                    store.selectedFolderId == chips[i].$1,
+                label: f.name,
+                selected: store.selectedFolderId == f.id,
                 onTap: () {
-                  if (i == chips.length - 1) {
-                    showFolderCreate(context);
-                  } else if (i > 0) {
-                    showFolderMenu(context, store.folders[i - 1]);
-                  } else {
-                    store.selectFolder(chips[i].$1);
-                  }
+                  store.selectFolder(f.id);
                 },
               ),
             ),
+          // New playlist chip
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: _FilterChipWrap(
+              label: 'New playlist',
+              selected: false,
+              onTap: () => showFolderCreate(context),
+            ),
+          ),
         ],
       ),
     );
@@ -681,12 +713,19 @@ class _FilterChipWrap extends StatelessWidget {
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(20),
           color: selected
-              ? scheme.primaryContainer
-              : scheme.surfaceContainerHighest.withAlpha(120),
+              ? scheme.primary
+              : scheme.surfaceContainerHighest.withOpacity(0.3),
         ),
-        child: Text(label,
+        child: Center(
+          child: Text(
+            label,
             style: TextStyle(
-                fontWeight: selected ? FontWeight.w600 : FontWeight.w400)),
+              color: selected ? Colors.white : scheme.onSurface,
+              fontWeight: FontWeight.w600,
+              fontSize: 13,
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -712,7 +751,14 @@ class _FoldersList extends StatelessWidget {
         return KeyedSubtree(
           key: ValueKey(f.id),
           child: ListTile(
-            leading: Text(f.emoji, style: const TextStyle(fontSize: 22)),
+            leading: Container(
+              width: 32, height: 32,
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.primaryContainer.withOpacity(0.3),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(Icons.queue_music, size: 20, color: Colors.white),
+            ),
             title: Text(f.name),
             subtitle: Text(
                 '${store.tracks.where((t) => t.folderIds.contains(f.id)).length} audios'),
@@ -735,7 +781,14 @@ class _NewFolderRow extends StatelessWidget {
   const _NewFolderRow();
   @override
   Widget build(BuildContext context) => ListTile(
-        leading: const Text('➕', style: TextStyle(fontSize: 22)),
+        leading: Container(
+          width: 32, height: 32,
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.primaryContainer.withOpacity(0.3),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: const Icon(Icons.add, size: 20, color: Colors.white),
+        ),
         title: const Text('New playlist'),
         onTap: () => showFolderCreate(context),
       );
@@ -806,7 +859,14 @@ class _FoldersGrid extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text(f.emoji, style: const TextStyle(fontSize: 30)),
+            Container(
+              width: 48, height: 48,
+              decoration: BoxDecoration(
+                color: scheme.primaryContainer.withOpacity(0.3),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(Icons.queue_music, size: 24, color: Colors.white),
+            ),
             const SizedBox(height: 6),
             Text(f.name, maxLines: 1, overflow: TextOverflow.ellipsis),
             Text(
@@ -826,14 +886,21 @@ class _FoldersGrid extends StatelessWidget {
           RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: InkWell(
         onTap: () => showFolderCreate(context),
-        child: const SizedBox(
+        child: SizedBox(
           height: 96,
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Text('➕', style: TextStyle(fontSize: 30)),
-              SizedBox(height: 6),
-              Text('New playlist'),
+              Container(
+                width: 48, height: 48,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0A5CD6).withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.add, size: 24, color: Color(0xFF0A5CD6)),
+              ),
+              const SizedBox(height: 6),
+              const Text('New playlist'),
             ],
           ),
         ),
