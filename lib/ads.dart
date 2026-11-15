@@ -28,6 +28,22 @@ String get bannerUnitId => AdConfig.bannerUnitId;
 /// True when real, revenue-earning units are configured.
 bool get usingLiveAdUnit => AdConfig.bannerIsLive;
 
+/// What actually happened when the coin-shop rewarded video was requested.
+///
+/// The old API returned a bare bool, so "no ad to show" and "the user closed
+/// the video before the reward" were reported with the same message — which is
+/// why a video that clearly played looked like it paid nothing.
+enum RewardedOutcome {
+  /// Nothing could be loaded (no fill, offline, SDK not ready).
+  unavailable,
+
+  /// The video played, but it was dismissed before Google fired the reward.
+  dismissedEarly,
+
+  /// Google fired the reward callback. Coins may be credited.
+  earned,
+}
+
 class Ads extends ChangeNotifier {
   Ads._();
   static final Ads I = Ads._();
@@ -70,7 +86,10 @@ class Ads extends ChangeNotifier {
       await MobileAds.instance.initialize();
       _ready = true;
     } catch (e) {
-      debugPrint('AdMob init failed: $e');
+      debugPrint('RTADS: AdMob init failed: $e');
+      // Clear the latch so a later tap can retry instead of the app running
+      // permanently ad-less for this process.
+      _boot = null;
       return;
     }
     notifyListeners();
@@ -134,8 +153,10 @@ class Ads extends ChangeNotifier {
 
   /// Fills the playlist banner pool up to [_playlistTarget]. Safe to call
   /// repeatedly — it only loads while the pool isn't full and no load is in
-  /// flight. Only ads that actually loaded (onAdLoaded fired) enter the pool,
-  /// so takePlaylistAd() never returns an un-loaded ad.
+  /// flight. An ad enters the pool only after `load()` resolves: mounting an
+  /// `AdWidget` for an ad that has not finished loading throws "Ad must be
+  /// loaded before being placed in the widget tree", which is exactly what the
+  /// audio-list placements used to hit.
   Future<void> preloadPlaylistAds() async {
     if (!Entitlements.I.showAds) return;
     while (_playlistAds.length < _playlistTarget && !_playlistLoading) {
@@ -147,28 +168,20 @@ class Ads extends ChangeNotifier {
           request: const AdRequest(),
           placement: 'playlist_banner',
           listener: BannerAdListener(
-            onAdLoaded: (a) {
-              final ba = a as BannerAd;
-              if (!_playlistAds.contains(ba)) {
-                _playlistAds.add(ba);
-              }
-              _playlistLoading = false;
-              // Keep the pool topped up.
-              if (_playlistAds.length < _playlistTarget) {
-                unawaited(preloadPlaylistAds());
-              }
-            },
             onAdFailedToLoad: (a, error) {
               a.dispose();
-              _playlistLoading = false;
               debugPrint(
                   'playlist banner preload failed: ${error.message}');
-              unawaited(
-                  _retryPlaylistAfter(const Duration(seconds: 30)));
             },
           ),
         );
         await ad.load();
+        if (!_playlistAds.contains(ad)) _playlistAds.add(ad);
+        _playlistLoading = false;
+        // Keep the pool topped up.
+        if (_playlistAds.length < _playlistTarget) {
+          unawaited(preloadPlaylistAds());
+        }
       } catch (e) {
         _playlistLoading = false;
         debugPrint('playlist banner setup failed: $e');
@@ -237,17 +250,42 @@ class Ads extends ChangeNotifier {
     }
   }
 
-  /// Re-opens the consent / privacy options form (required entry point).
-  Future<void> showPrivacyOptions() async {
-    try {
-      await ConsentForm.showPrivacyOptionsForm((FormError? error) {
-        if (error != null) {
-          debugPrint('UMP privacy form error: ${error.message}');
-        }
-      });
-    } catch (e) {
-      debugPrint('UMP privacy form failed: $e');
+  /// Re-opens the consent / privacy options form (required entry point for
+  /// every app that serves ads).
+  ///
+  /// Returns null when Google actually showed a form, or a short reason when it
+  /// could not (no published message for this app ID, offline, etc). The
+  /// Settings row uses that reason to offer Google's own ad settings instead of
+  /// leaving the tap looking dead.
+  Future<String?> showPrivacyOptions() async {
+    final done = Completer<String?>();
+    void finish(String? reason) {
+      if (!done.isCompleted) done.complete(reason);
     }
+
+    try {
+      ConsentInformation.instance.requestConsentInfoUpdate(
+        ConsentRequestParameters(),
+        () async {
+          try {
+            await ConsentForm.showPrivacyOptionsForm((FormError? error) {
+              finish(error?.message);
+            });
+          } catch (e) {
+            finish('$e');
+          }
+        },
+        (FormError error) => finish(error.message),
+      );
+    } catch (e) {
+      finish('$e');
+    }
+
+    return done.future.timeout(
+      const Duration(seconds: 20),
+      // No callback = the form was on screen (dismissal reports later).
+      onTimeout: () => null,
+    );
   }
 
   // ---- rewarded (coin shop) ---------------------------------------------
@@ -268,7 +306,7 @@ class Ads extends ChangeNotifier {
           onAdFailedToLoad: (error) {
             _rewardedLoading = false;
             debugPrint(
-                'rewarded load failed (${error.code}): ${error.message}');
+                'RTADS: rewarded load failed (${error.code}): ${error.message}');
           },
         ),
       );
@@ -278,34 +316,76 @@ class Ads extends ChangeNotifier {
     }
   }
 
-  /// Shows one rewarded video. Returns true only when the user watched far
-  /// enough for Google to fire the reward callback.
-  Future<bool> showRewarded() async {
+  /// Shows one rewarded video and reports exactly what happened, so the caller
+  /// can say "watch the whole video" instead of blaming the network.
+  Future<RewardedOutcome> showRewarded() async {
     await init();
     if (_rewarded == null) {
       unawaited(preloadRewarded());
-      final end = DateTime.now().add(const Duration(seconds: 6));
+      final end = DateTime.now().add(const Duration(seconds: 8));
       while (_rewarded == null && DateTime.now().isBefore(end)) {
         await Future<void>.delayed(const Duration(milliseconds: 200));
       }
     }
     final ad = _rewarded;
-    if (ad == null) return false;
+    if (ad == null) {
+      debugPrint('RTADS: rewarded unavailable (no fill yet)');
+      return RewardedOutcome.unavailable;
+    }
     _rewarded = null;
 
     var earned = false;
-    try {
-      await ad.showAndTrack(
-        onUserEarnedReward: (_, _) => earned = true,
-      );
-    } catch (e) {
-      ad.dispose();
-      debugPrint('rewarded threw: $e');
-      return false;
+    var presented = false;
+    var failed = false;
+    var closed = false;
+    final done = Completer<void>();
+    void close() {
+      if (closed) return;
+      closed = true;
+      done.complete();
     }
+
+    // Tracking-safe callback swap: the RevenueCat adapter re-wraps whatever is
+    // set here, so its impression/revenue events keep working.
+    ad.setTrackingFullScreenContentCallback(
+      FullScreenContentCallback<RewardedAd>(
+        onAdShowedFullScreenContent: (_) {
+          presented = true;
+          debugPrint('RTADS: rewarded showing');
+        },
+        onAdDismissedFullScreenContent: (_) {
+          debugPrint('RTADS: rewarded dismissed · earned=$earned');
+          close();
+        },
+        onAdFailedToShowFullScreenContent: (_, error) {
+          failed = true;
+          debugPrint(
+              'RTADS: rewarded failed to show ${error.code} ${error.message}');
+          close();
+        },
+      ),
+    );
+    try {
+      await ad.showAndTrack(onUserEarnedReward: (_, _) {
+        earned = true;
+        debugPrint('RTADS: rewarded earned');
+      });
+    } catch (e) {
+      debugPrint('RTADS: rewarded threw: $e');
+      failed = true;
+      close();
+    }
+    // `show()` resolves the moment the video is presented, not when it closes.
+    // Disposing there detached the reward callback, so the user watched the
+    // whole video and the coins never arrived. Wait for the close instead.
+    await done.future.timeout(const Duration(minutes: 10), onTimeout: () {
+      debugPrint('RTADS: rewarded close timed out');
+    });
     ad.dispose();
     unawaited(preloadRewarded());
-    return earned;
+    if (earned) return RewardedOutcome.earned;
+    if (failed || !presented) return RewardedOutcome.unavailable;
+    return RewardedOutcome.dismissedEarly;
   }
 
   // ---- download / import gate --------------------------------------------
@@ -340,10 +420,9 @@ class Ads extends ChangeNotifier {
     }
   }
 
-  /// Shows the download/import gate ad. Returns true only when the user
-  /// watched far enough for Google to fire the reward callback, meaning the
-  /// download/import may proceed. Returns false when no ad is available —
-  /// the caller should still proceed gracefully so the app never blocks.
+  /// Shows the download/import gate ad. Returns true when the ad actually ran
+  /// (reward earned, or the user closed it early) and false only when nothing
+  /// could be shown. The caller proceeds either way so the app never blocks.
   Future<bool> showDownloadAd() async {
     await init();
     if (_downloadAd == null) {
@@ -358,18 +437,36 @@ class Ads extends ChangeNotifier {
     _downloadAd = null;
 
     var earned = false;
+    var presented = false;
+    var closed = false;
+    final done = Completer<void>();
+    void close() {
+      if (closed) return;
+      closed = true;
+      done.complete();
+    }
+
+    ad.setTrackingFullScreenContentCallback(
+      FullScreenContentCallback<RewardedAd>(
+        onAdShowedFullScreenContent: (_) => presented = true,
+        onAdDismissedFullScreenContent: (_) => close(),
+        onAdFailedToShowFullScreenContent: (_, _) => close(),
+      ),
+    );
     try {
       await ad.showAndTrack(
         onUserEarnedReward: (_, _) => earned = true,
       );
     } catch (e) {
-      ad.dispose();
       debugPrint('download gate threw: $e');
-      return false;
+      close();
     }
+    // Same trap as showRewarded: show() resolves on presentation. Disposing
+    // immediately dropped the reward and the import was refused.
+    await done.future.timeout(const Duration(minutes: 10), onTimeout: () {});
     ad.dispose();
     unawaited(preloadDownloadAd());
-    return earned;
+    return earned || presented;
   }
 
   // ---- app open ----------------------------------------------------------
@@ -421,21 +518,41 @@ class Ads extends ChangeNotifier {
     _appOpen = null;
     await prefs.setInt('adAppOpenShownMs', now);
 
+    var closed = false;
+    final done = Completer<void>();
+    void close() {
+      if (closed) return;
+      closed = true;
+      done.complete();
+    }
+
+    ad.setTrackingFullScreenContentCallback(
+      FullScreenContentCallback<AppOpenAd>(
+        onAdDismissedFullScreenContent: (_) => close(),
+        onAdFailedToShowFullScreenContent: (_, _) => close(),
+      ),
+    );
     try {
       await ad.showAndTrack();
     } catch (e) {
-      ad.dispose();
-      debugPrint('app-open threw: $e');
-      return;
+      debugPrint('RTADS: app-open threw: $e');
+      close();
     }
+    // show() resolves when the ad appears, not when it is closed: disposing
+    // right away tore the ad down mid-impression.
+    await done.future.timeout(const Duration(minutes: 5), onTimeout: () {});
     ad.dispose();
     unawaited(preloadAppOpen());
   }
 }
 
-/// Slot B from `docs/ads.md`: a sticky, anchored adaptive banner that sits
-/// directly above the mini bar. Renders nothing for Pro, during the trial, or
-/// when a coin-shop "no ads" window is running.
+/// Slot B from `docs/ads.md`: a sticky banner that sits directly above the mini
+/// bar. Renders nothing for Pro, during the trial, or when a coin-shop "no ads"
+/// window is running.
+///
+/// Deliberately an anchored adaptive banner: the fixed 320x50 request filled
+/// erratically on modern phones and left a black strip where the creative
+/// never painted.
 class AdBanner extends StatelessWidget {
   const AdBanner({super.key});
 
@@ -449,7 +566,6 @@ class AdBanner extends StatelessWidget {
         return _BannerFrame(
           key: ValueKey('sticky-${AdConfig.useTestAds}'),
           unitId: AdConfig.bannerUnitId,
-          adaptive: true,
         );
       },
     );
@@ -499,7 +615,6 @@ class _PlaylistAdCardState extends State<PlaylistAdCard> {
         return _BannerFrame(
           key: widget.key,
           unitId: AdConfig.playlistUnitId,
-          adaptive: false,
           inline: true,
           preloadedAd: _preloaded,
         );
@@ -510,7 +625,6 @@ class _PlaylistAdCardState extends State<PlaylistAdCard> {
 
 class _BannerFrame extends StatefulWidget {
   final String unitId;
-  final bool adaptive;
   final bool inline;
   /// A preloaded banner ad to show immediately (playlist placement). When null,
   /// the frame loads on demand.
@@ -518,7 +632,6 @@ class _BannerFrame extends StatefulWidget {
   const _BannerFrame({
     super.key,
     required this.unitId,
-    this.adaptive = false,
     this.inline = false,
     this.preloadedAd,
   });
@@ -527,20 +640,23 @@ class _BannerFrame extends StatefulWidget {
   State<_BannerFrame> createState() => _BannerFrameState();
 }
 
-class _BannerFrameState extends State<_BannerFrame> {
+class _BannerFrameState extends State<_BannerFrame>
+    with WidgetsBindingObserver {
   BannerAd? _ad;
   bool _visible = false;
   bool _loading = false;
   int _attempt = 0;
   Timer? _retry;
 
-  /// Wide gap on purpose: an accidental click on the ad is the one metric that
-  /// gets an AdMob account flagged.
-  static const double _gap = 8;
+  /// Deliberate separation from the mini bar and the nav bar: an accidental
+  /// click on the ad is the one metric that gets an AdMob account flagged, and
+  /// a banner squeezed against navigation is a placement policy violation.
+  static const double _gap = 12;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     // Playlist placement with a preloaded ad: show it immediately, no load
     // wait. Without a preload, fall through to on-demand loading below.
     if (widget.inline && widget.preloadedAd != null) {
@@ -564,10 +680,23 @@ class _BannerFrameState extends State<_BannerFrame> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _retry?.cancel();
     _ad?.dispose();
     _ad = null;
     super.dispose();
+  }
+
+  /// Retry as soon as the app is foregrounded again: the usual reason a banner
+  /// failed is that the phone had no network when the screen first loaded, and
+  /// waiting for a 5-minute backoff makes it look permanently broken.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    if (_visible || _ad != null || _loading) return;
+    _retry?.cancel();
+    _attempt = 0;
+    _load();
   }
 
   Future<void> _load() async {
@@ -577,56 +706,65 @@ class _BannerFrameState extends State<_BannerFrame> {
     try {
       await Ads.I.init();
       if (!mounted) return;
-      final AdSize size;
-      if (widget.adaptive) {
+      // Anchored adaptive: this is the format that reliably fills. A fixed
+      // 320x50 request on a modern phone returns either no fill or a banner
+      // whose creative does not paint, which is the black strip users saw.
+      AdSize size = AdSize.banner;
+      if (!widget.inline) {
+        final width =
+            (MediaQuery.sizeOf(context).width - 24).truncate().clamp(300, 1200);
         size = await AdSize
                 .getLargeAnchoredAdaptiveBannerAdSizeWithOrientation(
-                    MediaQuery.orientationOf(context),
-                    MediaQuery.sizeOf(context).width.truncate()) ??
+                    MediaQuery.orientationOf(context), width) ??
             AdSize.banner;
-      } else {
-        size = AdSize.banner;
       }
       if (!mounted) return;
+      debugPrint(
+          'RTADS: banner request ${widget.inline ? 'inline' : 'sticky'} '
+          'unit=${widget.unitId} ${size.width}x${size.height}');
       final ad = RevenueCatAdMob.createBannerAd(
         adUnitId: widget.unitId,
         size: size,
         request: const AdRequest(),
         placement: widget.inline ? 'playlist_banner' : 'home_banner',
         listener: BannerAdListener(
-          onAdLoaded: (ad) {
+          // Visibility is driven by the SDK, never by `await load()`: the
+          // widget must not mount before the creative is ready.
+          onAdLoaded: (loaded) {
             if (!mounted) {
-              ad.dispose();
+              loaded.dispose();
               return;
             }
-            setState(() {
-              _visible = true;
-              _attempt = 0;
-            });
+            _attempt = 0;
+            debugPrint('RTADS: banner loaded (${size.width}x${size.height})');
+            setState(() => _visible = true);
           },
+          onAdImpression: (_) => debugPrint('RTADS: banner impression'),
           onAdFailedToLoad: (ad, error) {
             ad.dispose();
             if (identical(_ad, ad)) _ad = null;
+            debugPrint('RTADS: banner failed (${error.code}) '
+                '${error.code == 0 ? "network/DNS unreachable — " : ""}'
+                '${error.message}');
             if (!mounted) return;
-            // Back off instead of hammering the network: 30 s → 2 min → 5 min.
+            // Back off instead of hammering the network: 30 s → 60 s → 2 min.
             _attempt++;
             final delay = switch (_attempt) {
               1 => const Duration(seconds: 30),
-              2 => const Duration(minutes: 2),
-              _ => const Duration(minutes: 5),
+              2 => const Duration(seconds: 60),
+              _ => const Duration(minutes: 2),
             };
             _retry?.cancel();
             _retry = Timer(delay, () {
               if (mounted) _load();
             });
-            debugPrint('banner load failed (${error.code}): ${error.message}');
           },
         ),
       );
       _ad = ad;
       await ad.load();
     } catch (e) {
-      debugPrint('banner setup failed: $e');
+      debugPrint('RTADS: banner setup failed: $e');
     } finally {
       _loading = false;
     }
@@ -677,12 +815,18 @@ class _BannerFrameState extends State<_BannerFrame> {
         },
       );
     }
+    final scheme = Theme.of(context).colorScheme;
     return Padding(
       padding: const EdgeInsets.only(left: 12, right: 12, bottom: _gap),
-      child: SizedBox(
-        width: ad.size.width.toDouble(),
-        height: ad.size.height.toDouble(),
-        child: AdWidget(ad: ad),
+      // The background colour matters: a platform view over a fully
+      // transparent slot composites as a black band on some OEM builds.
+      child: ColoredBox(
+        color: scheme.surface,
+        child: SizedBox(
+          width: ad.size.width.toDouble(),
+          height: ad.size.height.toDouble(),
+          child: AdWidget(ad: ad),
+        ),
       ),
     );
   }

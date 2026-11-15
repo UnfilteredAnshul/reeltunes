@@ -1,10 +1,10 @@
 # ReelTunes — Codes, referrals & admin dashboard
 
 > Companion to `free-vs-pro.md`.
-> **Phase 1 shipped** (local engine, in-app dashboard): see §12.
+> **Phase 1 shipped** (local engine): see §12.
 > **Phase 2 shipped** (Cloudflare Worker + D1 + web dashboard): see §13. The
 > app now redeems against the shared registry; the local engine is the offline
-> admin cache.
+> fallback. Admin lives only in the web dashboard — the app has no admin screen.
 > All of it will live on the same Cloudflare Worker as the entitlement service,
 > so there is still **one backend, one bill (₹0), one dashboard.**
 
@@ -240,8 +240,8 @@ economy health (coins minted vs spent). Don't build before you have numbers.
 1. D1 schema + `/redeem` + `/entitlement` sharing one signer.
 2. ✅ **App: "Redeem code" sheet, wired to `Entitlements`** — shipped locally
    (§12), same call site for the server.
-3. ✅ **Dashboard: codes list + create + revoke** — shipped in-app; the web
-   version is still to build.
+3. **Dashboard: codes list + create + revoke** � shipped as the web dashboard
+   on the Cloudflare Worker. The app has no admin screen.
 4. Creators + campaigns views.
 5. Master device allowlist (the current master code is debug-only).
 6. Rate limits + Play Integrity check on `/redeem`.
@@ -268,7 +268,7 @@ every redeem, grant, expiry and dashboard flow end to end.
 |---|---|
 | `lib/promo.dart` | `PromoEngine`: registry, redemption log, normalise, validate, grant. The single call the UI makes is `redeem()`. |
 | `lib/redeem_sheet.dart` | Bottom sheet: code field → `PromoEngine.redeem()` → sentence. No other logic. |
-| `lib/code_admin.dart` | In-app dashboard: status card, built-ins, codes list (copy/revoke/delete), create sheet, redemption log, danger zone. |
+
 | `lib/entitlements.dart` | New, separate grant fields (`grantUntilMs`, `grantLifetime`, `grantCode`) and `codeGrantActive`. `isPro` now = store **or** debug **or** grant **or** trial. |
 | `lib/library_sync.dart` | Mirrors `grant` next to `trialStartMs`, adopts it on reinstall. |
 
@@ -276,7 +276,7 @@ every redeem, grant, expiry and dashboard flow end to end.
 
 | Code | What it does | Build |
 |---|---|---|
-| **`ANSHUL2012`** | Lifetime Pro on this device, and unlocks the dashboard | debug only |
+| **`ANSHUL2012`** | Lifetime Pro on this device | debug only |
 | **`FREEVERSION`** | Clears store state, debug flag, grant **and ends the trial** → real Free tier (caps + ads) | debug only |
 | `RT` + 8 chars | Any code created in the dashboard | any build |
 
@@ -288,8 +288,7 @@ an SSAID allowlist instead — the APK never carries the string.
 
 1. Settings → **Redeem a code** → `ANSHUL2012` → Pro card flips to "Pro ·
    lifetime code", ads flag off, caps lifted.
-2. Settings → **Code dashboard** → New → 1 day Pro, max uses 3, custom code
-   `TEST1` → copy it.
+2. Web dashboard -> New -> 1 day Pro, max uses 3, custom code `TEST1` -> copy it.
 3. `FREEVERSION` → back to Free (trial retired too, so caps and ads are real).
 4. Redeem `TEST1` → Pro until tomorrow; redeem it again → "Already used on this
    device".
@@ -314,13 +313,12 @@ an SSAID allowlist instead — the APK never carries the string.
 ### What changes when the Worker lands
 
 Only `PromoEngine.redeem()` gains a network branch (POST `/redeem` →
-`{plan, exp, signedEntitlement}`), and `code_admin.dart` switches its list from
-the local registry to `GET /admin/codes`. The UI, the bottom sheet, the
+`{plan, exp, signedEntitlement}`). The UI, the bottom sheet, the
 `Entitlements` fields and the mirror format stay exactly as they are.
 
 ---
 
-## 13. Phase 2 � shared Worker + dashboard (shipped 2026-11-11)
+## 13. Phase 2 � shared Worker + dashboard (shipped 2026-11-11)
 
 The phone is no longer the server. A code created in the dashboard works on
 every install on its next redeem, usually within seconds.
@@ -361,9 +359,8 @@ created on the phone appears on the web and vice versa.
 Screens now live: overview counters, codes table with search/state filter,
 create, revoke/unrevoke, delete, recent redemptions, per-code log, revoke all.
 
-The in-app dashboard (Settings ? Code dashboard) can connect to the same Worker
-with the same token: paste it once, then create/revoke/delete against the shared
-registry. The token is never compiled into the APK.
+The app has no admin screen. Everything is created, revoked, deleted and
+clawed back from this page.
 
 ### Not built yet
 

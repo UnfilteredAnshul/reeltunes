@@ -65,8 +65,6 @@ String? linkProblem(String raw) {
   return linkRejectedMessage;
 }
 
-bool linkAllowed(String raw) => linkProblem(raw) == null;
-
 /// True for the host itself and any sub-domain (`m.`, `vt.`, `www.`).
 bool _isUnder(String host, String domain) =>
     host == domain || host.endsWith('.$domain');

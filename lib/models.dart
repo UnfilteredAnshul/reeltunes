@@ -149,13 +149,28 @@ class AppStore extends ChangeNotifier {
   // per-feature prefs
   bool confirmDelete = true; // ask before deleting a track
   bool confirmRemove = true; // ask before removing a track from the library
+  /// Ask before deleting a playlist. The confirmation card has a "do not show
+  /// again" checkbox that flips this off; Settings can turn it back on.
+  bool confirmPlaylistDelete = true;
   bool playDuringCalls = false; // keep audio playing when a call comes in
   /// Whether the player and media notification survive swiping the app out of
   /// recents. Default OFF (strict): swiping kills playback and the notification.
   /// Absolute — whatever the checkbox says is what happens.
   bool surviveRecentsSwipe = false;
-  SortBy sortBy = SortBy.dateAdded; // default: newest first
-  bool sortAsc = false; // descending = newest first when sortBy != manual
+  SortBy sortBy = SortBy.dateAdded; // All audios: newest first
+  bool sortAsc = false; // descending = newest first
+
+  /// Per-playlist sort, keyed by folder id. A playlist without an entry opens
+  /// in its own manual order if it has one, otherwise newest first. Keeping
+  /// this per playlist is what lets one playlist stay alphabetical while
+  /// another stays hand-arranged.
+  Map<String, int> playlistSortBy = {};
+  Map<String, bool> playlistSortAsc = {};
+
+  /// Per-playlist manual order (folder id -> track ids). This is the snapshot
+  /// a date/name sort can never overwrite; selecting Manual restores it.
+  /// All audios has no entry: drag order exists only inside playlists.
+  Map<String, List<String>> manualOrders = {};
 
   String? selectedFolderId; // null = All audios
 
@@ -182,6 +197,11 @@ class AppStore extends ChangeNotifier {
   /// being served 3-5. Capped to recent behavior, not all-time.
   List<int> loopHistory = [];
   static const int maxLoopHistory = 12;
+
+  /// Last few search terms, newest first. Shown under the search field so a
+  /// repeat lookup is one tap.
+  List<String> recentSearches = [];
+  static const int maxRecentSearches = 8;
 
   bool get fullPro => Entitlements.I.isPro;
 
@@ -226,10 +246,14 @@ class AppStore extends ChangeNotifier {
     if (rangeMax < rangeMin) rangeMax = rangeMin;
     confirmDelete = _prefs.getBool('confirmDelete') ?? true;
     confirmRemove = _prefs.getBool('confirmRemove') ?? true;
+    confirmPlaylistDelete = _prefs.getBool('confirmPlaylistDelete') ?? true;
     playDuringCalls = _prefs.getBool('playDuringCalls') ?? false;
     surviveRecentsSwipe = _prefs.getBool('surviveRecentsSwipe') ?? false;
-    sortBy = SortBy.values[_prefs.getInt('sortBy') ?? 0];
-    sortAsc = _prefs.getBool('sortAsc') ?? true;
+    sortBy = SortBy.values[_prefs.getInt('sortBy') ?? 2];
+    sortAsc = _prefs.getBool('sortAsc') ?? false;
+    playlistSortBy = _decodeIntMap(_prefs.getString('playlistSortBy'));
+    playlistSortAsc = _decodeBoolMap(_prefs.getString('playlistSortAsc'));
+    manualOrders = _decodeOrders(_prefs.getString('manualOrders'));
     guideBannerDismissed = _prefs.getBool('guideBannerDismissed') ?? false;
     hiddenFileNames = _prefs.getStringList('hiddenFileNames') ?? const [];
     lastTrackId = _prefs.getString('lastTrackId') ?? '';
@@ -237,6 +261,7 @@ class AppStore extends ChangeNotifier {
         .map(int.tryParse)
         .whereType<int>()
         .toList();
+    recentSearches = _prefs.getStringList('recentSearches') ?? const [];
 
     if (_libFile!.existsSync()) {
       try {
@@ -269,10 +294,15 @@ class AppStore extends ChangeNotifier {
     _prefs.setInt('rangeMax', rangeMax);
     _prefs.setBool('confirmDelete', confirmDelete);
     _prefs.setBool('confirmRemove', confirmRemove);
+    _prefs.setBool('confirmPlaylistDelete', confirmPlaylistDelete);
     _prefs.setBool('playDuringCalls', playDuringCalls);
     _prefs.setBool('surviveRecentsSwipe', surviveRecentsSwipe);
     _prefs.setInt('sortBy', sortBy.index);
     _prefs.setBool('sortAsc', sortAsc);
+    _prefs.setString('playlistSortBy', jsonEncode(playlistSortBy));
+    _prefs.setString('playlistSortAsc', jsonEncode(playlistSortAsc));
+    _prefs.setString('manualOrders', jsonEncode(manualOrders));
+    _prefs.setStringList('recentSearches', recentSearches);
     _prefs.setBool('guideBannerDismissed', guideBannerDismissed);
     _prefs.setStringList('hiddenFileNames', hiddenFileNames);
     _prefs.setString('lastTrackId', lastTrackId);
@@ -295,6 +325,55 @@ class AppStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  // SharedPreferences has no map type; the per-playlist state travels as JSON.
+  static Map<String, int> _decodeIntMap(String? raw) {
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return {};
+      return {
+        for (final entry in decoded.entries)
+          if (entry.key is String && entry.value is num)
+            entry.key as String: (entry.value as num).toInt(),
+      };
+    } catch (_) {
+      return {};
+    }
+  }
+
+  static Map<String, bool> _decodeBoolMap(String? raw) {
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return {};
+      return {
+        for (final entry in decoded.entries)
+          if (entry.key is String && entry.value is bool)
+            entry.key as String: entry.value as bool,
+      };
+    } catch (_) {
+      return {};
+    }
+  }
+
+  static Map<String, List<String>> _decodeOrders(String? raw) {
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return {};
+      return {
+        for (final entry in decoded.entries)
+          if (entry.key is String && entry.value is List)
+            entry.key as String: [
+              for (final id in entry.value as List)
+                if (id is String) id,
+            ],
+      };
+    } catch (_) {
+      return {};
+    }
+  }
+
   // ---- mutations ----
   void addFolder(String name, String emoji) {
     folders.add(Folder(
@@ -307,6 +386,9 @@ class AppStore extends ChangeNotifier {
   void deleteFolder(String id) {
     folders.removeWhere((f) => f.id == id);
     if (selectedFolderId == id) selectedFolderId = null;
+    playlistSortBy.remove(id);
+    playlistSortAsc.remove(id);
+    manualOrders.remove(id);
     for (final t in tracks) {
       t.folderIds.remove(id);
     }
@@ -400,10 +482,95 @@ class AppStore extends ChangeNotifier {
 
   void setConfirmDelete(bool v) => _mutateSetting(() => confirmDelete = v);
   void setConfirmRemove(bool v) => _mutateSetting(() => confirmRemove = v);
+  void setConfirmPlaylistDelete(bool v) =>
+      _mutateSetting(() => confirmPlaylistDelete = v);
   void setPlayDuringCalls(bool v) => _mutateSetting(() => playDuringCalls = v);
   void setSurviveRecentsSwipe(bool v) => _mutateSetting(() => surviveRecentsSwipe = v);
-  void setSortBy(SortBy s) => _mutateSetting(() => sortBy = s);
-  void setSortAsc(bool v) => _mutateSetting(() => sortAsc = v);
+  /// Picks a sort for the current view. All audios keeps its own date/name
+  /// choice; a playlist remembers the choice for that playlist only.
+  void setSortBy(SortBy s) {
+    final id = selectedFolderId;
+    if (id == null) {
+      // Drag order is a playlist concept; All audios never offers Manual.
+      if (s == SortBy.manual) return;
+      _mutateSetting(() => sortBy = s);
+      return;
+    }
+    _mutateSetting(() {
+      if (s == SortBy.manual) {
+        // First time Manual is picked for this playlist: adopt what is on
+        // screen for that playlist now, ignoring any search or date filter so
+        // the snapshot covers every track in it. Picking Manual again
+        // restores, never re-seeds, the saved order.
+        manualOrders.putIfAbsent(
+            id, () => [for (final t in _folderTracksInSort(id)) t.id]);
+      }
+      playlistSortBy[id] = s.index;
+    });
+  }
+
+  void setSortAsc(bool v) {
+    final id = selectedFolderId;
+    if (id == null) {
+      _mutateSetting(() => sortAsc = v);
+      return;
+    }
+    _mutateSetting(() => playlistSortAsc[id] = v);
+  }
+
+  /// The sort actually applied to the visible list. All audios can never be
+  /// Manual. A playlist opens in its saved hand order when it has one, and in
+  /// newest-first until the user drags something for the first time.
+  SortBy get activeSortBy {
+    final id = selectedFolderId;
+    if (id == null) {
+      return sortBy == SortBy.manual ? SortBy.dateAdded : sortBy;
+    }
+    final saved = playlistSortBy[id];
+    if (saved != null) {
+      final by = SortBy.values[saved.clamp(0, SortBy.values.length - 1)];
+      if (by != SortBy.manual) return by;
+      return hasManualOrder(id) ? SortBy.manual : SortBy.dateAdded;
+    }
+    return hasManualOrder(id) ? SortBy.manual : SortBy.dateAdded;
+  }
+
+  bool get activeSortAsc {
+    final id = selectedFolderId;
+    if (id == null) return sortAsc;
+    return playlistSortAsc[id] ?? false;
+  }
+
+  bool hasManualOrder(String folderId) =>
+      (manualOrders[folderId] ?? const <String>[]).isNotEmpty;
+
+  /// Every track in a playlist, in the order that playlist would show them
+  /// right now by date/name, ignoring search and the date filter. Seeds a
+  /// first Manual order without leaving gaps for filtered-out tracks.
+  List<Track> _folderTracksInSort(String folderId) {
+    final list = tracks.where((t) => t.folderIds.contains(folderId)).toList();
+    final order = {for (var i = 0; i < list.length; i++) list[i].id: i};
+    final by = activeSortBy;
+    if (by == SortBy.name) {
+      list.sort((a, b) {
+        var c = a.title.toLowerCase().compareTo(b.title.toLowerCase());
+        if (c == 0) c = order[a.id]!.compareTo(order[b.id]!);
+        return activeSortAsc ? c : -c;
+      });
+    } else {
+      list.sort((a, b) {
+        var c = a.addedAtMs.compareTo(b.addedAtMs);
+        if (c == 0) c = order[a.id]!.compareTo(order[b.id]!);
+        return activeSortAsc ? c : -c;
+      });
+    }
+    return list;
+  }
+
+  /// Dragging is only allowed inside a playlist whose saved order is what you
+  /// see. Date/name sorts are read-only so they can never overwrite it.
+  bool get canRearrangeTracks =>
+      selectedFolderId != null && activeSortBy == SortBy.manual;
 
   void setRangeMin(int v) =>
       _mutateSetting(() => rangeMin = v.clamp(1, rangeMax));
@@ -512,10 +679,37 @@ class AppStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Used by Home's "See all" on the playlists row: the Library tab must show
+  /// the playlists section, even if the user had collapsed it earlier.
+  void setPlaylistsExpanded(bool v) {
+    if (playlistsExpanded == v) return;
+    playlistsExpanded = v;
+    notifyListeners();
+  }
+
   void dismissGuideBanner() {
     if (guideBannerDismissed) return;
     guideBannerDismissed = true;
     _persist();
+  }
+
+  /// Remembers a search term (newest first, de-duplicated, capped).
+  void addRecentSearch(String q) {
+    final term = q.trim();
+    if (term.length < 2) return;
+    recentSearches.removeWhere(
+        (e) => e.toLowerCase() == term.toLowerCase());
+    recentSearches.insert(0, term);
+    while (recentSearches.length > maxRecentSearches) {
+      recentSearches.removeLast();
+    }
+    _mutateSetting(() {});
+  }
+
+  void clearRecentSearches() {
+    if (recentSearches.isEmpty) return;
+    recentSearches = [];
+    _mutateSetting(() {});
   }
 
   // ---- grid rearrange mode (menu-invoked; never persisted) ----
@@ -523,6 +717,7 @@ class AppStore extends ChangeNotifier {
   bool arrangingTracks = false;
   bool get anyArranging => arrangingFolders || arrangingTracks;
   void startArranging({required bool folders}) {
+    if (!folders && !canRearrangeTracks) return;
     arrangingFolders = folders;
     arrangingTracks = !folders;
     notifyListeners();
@@ -623,48 +818,81 @@ class AppStore extends ChangeNotifier {
 
   Iterable<Track> get visibleTracks => _baseVisible();
 
-  /// visibleTracks in display order: store order when sortBy==manual,
-  /// otherwise name/date added with the asc/desc preference.
+  /// visibleTracks in display order. Manual = the playlist's saved order,
+  /// name/date = the active asc/desc choice. A sorted view never edits the
+  /// snapshot, so switching back to Manual restores the drag order exactly.
   List<Track> get visibleTracksSorted {
     final list = _baseVisible();
+    final by = activeSortBy;
+    final asc = activeSortAsc;
     final order = {
       for (var i = 0; i < list.length; i++) list[i].id: i,
     };
-    if (sortBy == SortBy.name) {
+    if (by == SortBy.manual) {
+      final saved = manualOrders[selectedFolderId] ?? const <String>[];
+      final rank = {
+        for (var i = 0; i < saved.length; i++) saved[i]: i,
+      };
+      list.sort((a, b) {
+        final ra = rank[a.id], rb = rank[b.id];
+        if (ra != null && rb != null) return ra.compareTo(rb);
+        if (ra != null) return -1; // snapshot entries come first
+        if (rb != null) return 1;
+        // Tracks added after the last drag keep their store order, at the end.
+        return order[a.id]!.compareTo(order[b.id]!);
+      });
+    } else if (by == SortBy.name) {
       list.sort((a, b) {
         var c = a.title.toLowerCase().compareTo(b.title.toLowerCase());
         if (c == 0) c = order[a.id]!.compareTo(order[b.id]!);
-        return sortAsc ? c : -c;
+        return asc ? c : -c;
       });
-    } else if (sortBy == SortBy.dateAdded) {
+    } else if (by == SortBy.dateAdded) {
       list.sort((a, b) {
         var c = a.addedAtMs.compareTo(b.addedAtMs);
         if (c == 0) c = order[a.id]!.compareTo(order[b.id]!);
-        return sortAsc ? c : -c;
+        return asc ? c : -c;
       });
     }
     return list;
   }
 
-  /// Drag-reorder inside the currently visible slice (folder + search +
-  /// date filter). Only the matching tracks are resequenced; everything else
-  /// keeps its place in the store.
+  /// Every track id in a playlist's manual order: the snapshot first, then
+  /// anything the snapshot has never seen (new imports, restored libraries).
+  List<String> _manualSequence(String folderId) {
+    final seen = <String>{};
+    final seq = <String>[];
+    for (final id in manualOrders[folderId] ?? const <String>[]) {
+      if (seen.add(id) && trackById(id) != null) seq.add(id);
+    }
+    for (final t in tracks) {
+      if (seen.add(t.id)) seq.add(t.id);
+    }
+    return seq;
+  }
+
+  /// Drag-reorder inside the currently visible playlist slice (folder +
+  /// search + date filter). Only that playlist's snapshot changes; `tracks`
+  /// keeps its storage order, so a later date/name sort is untouched.
+  ///
+  /// Ignored unless Manual is the active sort: dragging a date-sorted list
+  /// used to overwrite the user's saved arrangement.
   void reorderVisibleTracks(int oldIndex, int newIndex) {
-    // Display order, not raw store order: drag indices come from the sorted
-    // list (a playlist ad row is already mapped out by the caller).
+    final folderId = selectedFolderId;
+    if (folderId == null || activeSortBy != SortBy.manual) return;
     final visible = visibleTracksSorted;
     if (oldIndex < 0 || oldIndex >= visible.length) return;
     newIndex =
         (newIndex > oldIndex ? newIndex - 1 : newIndex).clamp(0, visible.length);
     final moved = visible.removeAt(oldIndex);
     visible.insert(newIndex, moved);
+
     final ids = {for (final t in visible) t.id};
     var vi = 0;
-    for (var i = 0; i < tracks.length; i++) {
-      if (ids.contains(tracks[i].id)) tracks[i] = visible[vi++];
-    }
-    // A drag = the user wants manual control again.
-    sortBy = SortBy.manual;
+    manualOrders[folderId] = [
+      for (final id in _manualSequence(folderId))
+        if (ids.contains(id)) visible[vi++].id else id,
+    ];
     _persist();
   }
 
@@ -744,4 +972,3 @@ const fallbackWebsiteUrl = 'https://YOUR-VERCEL-DOMAIN.vercel.app/reel?url=';
 /// building it needs external storage grants we only get with a real pick
 /// or MediaStore write; the flag plus string is still persisted now.
 const defaultSaveFolderName = 'ReelTune Audios';
-String firstRunDefaultPathHint = 'Downloads/$defaultSaveFolderName';

@@ -1,13 +1,13 @@
 // The network half of the promo system.
 //
 // `PromoEngine` keeps the rules and the local cache. This file only moves
-// bytes: POST /api/redeem for users, /api/admin/* for the dashboard.
+// bytes: POST /api/redeem for users, GET /api/grant for the owner's
+// "Remove effects" switch. Admin work lives in the Cloudflare dashboard.
 //
 // Release builds talk to the deployed Worker. Point it somewhere else with
 //   flutter build ... --dart-define=PROMO_API=https://host
 //
-// Nothing here stores a secret. The admin token is typed into the dashboard by
-// the owner and lives in SharedPreferences on that phone only.
+// Nothing here stores a secret.
 
 import 'dart:async';
 import 'dart:convert';
@@ -83,99 +83,6 @@ class PromoApi {
     return json['effectsRemoved'] == true;
   }
 
-  Future<PromoApiResult> removeEffects(
-    String token,
-    String code, {
-    bool removed = true,
-  }) async {
-    final json = await _send(
-      'POST',
-      '/api/admin/codes/${Uri.encodeComponent(code)}/remove-effects',
-      token: token,
-      body: {'removed': removed},
-    );
-    return _result(json);
-  }
-
-  Future<bool> checkToken(String token) async {
-    final json = await _send('GET', '/api/admin/session', token: token);
-    return json['ok'] == true;
-  }
-
-  Future<PromoApiResult> fetchDashboard(String token) async {
-    final json = await _send('GET', '/api/admin/codes', token: token);
-    return _result(json);
-  }
-
-  Future<PromoApiResult> fetchRedemptions(String token, {int limit = 200}) async {
-    final json = await _send(
-      'GET',
-      '/api/admin/redemptions?limit=$limit',
-      token: token,
-    );
-    return _result(json);
-  }
-
-  Future<PromoApiResult> fetchStats(String token) async {
-    final json = await _send('GET', '/api/admin/stats', token: token);
-    return _result(json);
-  }
-
-  Future<PromoApiResult> createCode(
-    String token, {
-    required String type,
-    required int days,
-    required int maxUses,
-    required int validForDays,
-    required String campaign,
-    required String notes,
-    String? code,
-  }) async {
-    final json = await _send(
-      'POST',
-      '/api/admin/codes',
-      token: token,
-      body: {
-        'type': type,
-        'days': days,
-        'maxUses': maxUses,
-        'validForDays': validForDays,
-        'campaign': campaign,
-        'notes': notes,
-        if ((code ?? '').trim().isNotEmpty) 'code': code!.trim(),
-      },
-    );
-    return _result(json);
-  }
-
-  Future<PromoApiResult> setRevoked(
-    String token,
-    String code,
-    bool revoked,
-  ) async {
-    final json = await _send(
-      'PATCH',
-      '/api/admin/codes/${Uri.encodeComponent(code)}',
-      token: token,
-      body: {'revoked': revoked},
-    );
-    return _result(json);
-  }
-
-  Future<PromoApiResult> deleteCode(String token, String code) async {
-    final json = await _send(
-      'DELETE',
-      '/api/admin/codes/${Uri.encodeComponent(code)}?force=1',
-      token: token,
-    );
-    return _result(json);
-  }
-
-  Future<PromoApiResult> revokeAll(String token) async {
-    final json = await _send('POST', '/api/admin/revoke-all', token: token);
-    return _result(json);
-  }
-
   // ---- transport ---------------------------------------------------------
 
   Future<Map<String, dynamic>> _post(
@@ -186,14 +93,12 @@ class PromoApi {
   Future<Map<String, dynamic>> _send(
     String method,
     String path, {
-    String? token,
     Map<String, dynamic>? body,
   }) async {
     final uri = Uri.parse('$baseUrl$path');
     final headers = <String, String>{
       'accept': 'application/json',
       if (body != null) 'content-type': 'application/json',
-      if (token != null && token.isNotEmpty) 'authorization': 'Bearer $token',
     };
 
     http.Response response;

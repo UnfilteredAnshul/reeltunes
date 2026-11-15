@@ -100,6 +100,17 @@ class NotificationService {
     }
   }
 
+  /// Android's own notification settings for ReelTunes. This is where a user
+  /// allows the playback notification after denying it once (Android stops
+  /// showing the in-app prompt after two denials).
+  Future<void> openSystemNotificationSettings() async {
+    try {
+      await _channel.invokeMethod<void>('openNotificationSettings');
+    } catch (e) {
+      debugPrint('notification service: app notification settings unavailable $e');
+    }
+  }
+
   /// Posts an immediate sample, so the user can see the wording without
   /// waiting three days. Debug row only.
   Future<void> sendTestReminder() async {

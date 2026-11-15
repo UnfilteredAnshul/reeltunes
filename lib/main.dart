@@ -7,6 +7,8 @@ import 'package:receive_intent/receive_intent.dart' as ri;
 import 'ads.dart';
 import 'billing.dart';
 import 'coins.dart';
+import 'consent.dart';
+import 'cover_art.dart';
 import 'entitlements.dart';
 import 'error_report.dart';
 import 'library.dart';
@@ -19,7 +21,6 @@ import 'settings_screen.dart';
 import 'sheets.dart';
 import 'top_toast.dart';
 import 'home_screen.dart';
-import 'smart_loop_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -90,11 +91,33 @@ class _ReelTuneAppState extends State<ReelTuneApp> {
     );
   }
 
-  ThemeData _theme(Brightness b) => ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFF0A5CD6), brightness: b),
-      );
+  ThemeData _theme(Brightness b) {
+    final base =
+        ColorScheme.fromSeed(seedColor: kNeonBlue, brightness: b);
+    final scheme = b == Brightness.dark
+        ? base.copyWith(
+            primary: kNeonBlue,
+            onPrimary: Colors.white,
+            secondary: const Color(0xFF22D3EE),
+            onSecondary: Colors.black,
+            surface: const Color(0xFF070A12),
+            onSurface: const Color(0xFFE8EEFB),
+            surfaceContainerHighest: const Color(0xFF161D2E),
+            surfaceContainerHigh: const Color(0xFF111726),
+          )
+        : base.copyWith(
+            primary: kNeonBlue,
+            onPrimary: Colors.white,
+            secondary: const Color(0xFF0891B2),
+            surface: const Color(0xFFF7FAFF),
+            surfaceContainerHighest: const Color(0xFFE7EEFB),
+          );
+    return ThemeData(
+      useMaterial3: true,
+      colorScheme: scheme,
+      scaffoldBackgroundColor: scheme.surface,
+    );
+  }
 }
 
 class RootScreen extends StatefulWidget {
@@ -123,6 +146,15 @@ class _RootScreenState extends State<RootScreen>
         CoinWallet.I.init(),
         Future.delayed(minSplash), // coin must be visible, even briefly
       ]);
+      // Legal gate first: the Privacy Policy / Terms agreement is required
+      // before anything imports or plays. On a reinstall the durable record in
+      // Download/ReelTunes/consent.json is found and the user confirms again.
+      await ConsentService.I.load();
+      if (!mounted) return;
+      if (ConsentService.I.needsAgreement) {
+        await showConsentDialog(context);
+        if (!mounted) return;
+      }
       // Load the audios folder grant, restore a mirror after a reinstall and
       // pick up anything dropped in with a file manager.
       await LibrarySync.init();
@@ -252,40 +284,70 @@ class _RootScreenState extends State<RootScreen>
   @override
   Widget build(BuildContext context) {
     if (!ready) return const _SplashScreen();
+    final scheme = Theme.of(context).colorScheme;
+    void openLibrary({bool playlists = false}) {
+      if (playlists) AppStore.I.setPlaylistsExpanded(true);
+      setState(() => _selectedIndex = 1);
+    }
+
     final screens = [
-      const HomeScreen(),
+      HomeScreen(
+        onOpenLibrary: openLibrary,
+        onOpenPlaylists: () => openLibrary(playlists: true),
+      ),
       const LibraryScreen(),
-      const SearchScreen(),
+      SearchScreen(active: _selectedIndex == 2),
       const SettingsScreen(),
     ];
     return Scaffold(
-      body: IndexedStack(index: _selectedIndex, children: screens),
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _selectedIndex,
-        onTap: (i) => setState(() => _selectedIndex = i),
-        type: BottomNavigationBarType.fixed,
-        selectedItemColor: Theme.of(context).colorScheme.primary,
-        unselectedItemColor: Theme.of(context).colorScheme.onSurfaceVariant,
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.home_outlined),
-            activeIcon: Icon(Icons.home),
-            label: 'Home',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.library_music_outlined),
-            activeIcon: Icon(Icons.library_music),
-            label: 'Library',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.search),
-            activeIcon: Icon(Icons.search),
-            label: 'Search',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.more_horiz),
-            activeIcon: Icon(Icons.more_horiz),
-            label: 'More',
+      backgroundColor: scheme.surface,
+      // The mesh background lives behind every tab; each tab's own Scaffold is
+      // transparent so the art shows through instead of a dead black field.
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          const _AppBackground(),
+          IndexedStack(index: _selectedIndex, children: screens),
+        ],
+      ),
+      // Sticky ad slot + always-mounted mini player stay above the nav bar on
+      // every tab, so the free-tier banner has a fixed anchor and playback
+      // controls are one tap away from anywhere.
+      bottomNavigationBar: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const AdBanner(),
+          const MiniBar(),
+          BottomNavigationBar(
+            currentIndex: _selectedIndex,
+            onTap: (i) => setState(() => _selectedIndex = i),
+            type: BottomNavigationBarType.fixed,
+            selectedItemColor: kNeonBlue,
+            unselectedItemColor: scheme.onSurfaceVariant,
+            backgroundColor: scheme.surface,
+            elevation: 0,
+            items: const [
+              BottomNavigationBarItem(
+                icon: Icon(Icons.home_outlined),
+                activeIcon: Icon(Icons.home),
+                label: 'Home',
+              ),
+              BottomNavigationBarItem(
+                icon: Icon(Icons.library_music_outlined),
+                activeIcon: Icon(Icons.library_music),
+                label: 'Library',
+              ),
+              BottomNavigationBarItem(
+                icon: Icon(Icons.search),
+                activeIcon: Icon(Icons.search),
+                label: 'Search',
+              ),
+              BottomNavigationBarItem(
+                icon: Icon(Icons.settings_outlined),
+                activeIcon: Icon(Icons.settings),
+                label: 'Settings',
+              ),
+            ],
           ),
         ],
       ),
@@ -321,12 +383,322 @@ class _RootScreenState extends State<RootScreen>
   }
 }
 
-/// Simple search screen — opens Library with search pre-focused.
-class SearchScreen extends StatelessWidget {
-  const SearchScreen({super.key});
+/// Search across every audio and playlist, independent of the library filters.
+class SearchScreen extends StatefulWidget {
+  /// True while this tab is the selected one. The field takes focus (and the
+  /// keyboard opens) as soon as the user taps Search in the nav bar.
+  final bool active;
+  const SearchScreen({super.key, this.active = false});
+  @override
+  State<SearchScreen> createState() => _SearchScreenState();
+}
+
+class _SearchScreenState extends State<SearchScreen> {
+  final _ctrl = TextEditingController();
+  final _focus = FocusNode();
+  String _q = '';
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.active) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _focus.requestFocus();
+      });
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant SearchScreen old) {
+    super.didUpdateWidget(old);
+    if (widget.active && !old.active) {
+      // Nav tap: open the keyboard straight away, no second tap needed.
+      _focus.requestFocus();
+    }
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  void _commit(String value) {
+    if (value.trim().isEmpty) return;
+    AppStore.I.addRecentSearch(value);
+  }
+
+  void _use(String term) {
+    _ctrl.text = term;
+    _ctrl.selection = TextSelection.collapsed(offset: term.length);
+    setState(() => _q = term);
+    _focus.requestFocus();
+  }
+
   @override
   Widget build(BuildContext context) {
-    return const LibraryScreen();
+    final store = AppStore.I;
+    final scheme = Theme.of(context).colorScheme;
+    final q = _q.trim().toLowerCase();
+
+    final folders = q.isEmpty
+        ? <Folder>[]
+        : store.folders
+            .where((f) => f.name.toLowerCase().contains(q))
+            .toList();
+    final tracks = q.isEmpty
+        ? <Track>[]
+        : store.tracks
+            .where((t) =>
+                t.title.toLowerCase().contains(q) ||
+                t.source.toLowerCase().contains(q))
+            .toList();
+
+    return Scaffold(
+      // Transparent so RootScreen's mesh background shows through.
+      backgroundColor: Colors.transparent,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        titleSpacing: 20,
+        title: const Text('Search',
+            style: TextStyle(fontSize: 28, fontWeight: FontWeight.w700)),
+      ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+            child: Container(
+              decoration: BoxDecoration(
+                color: scheme.surfaceContainerHighest.withValues(alpha: 0.42),
+                borderRadius: BorderRadius.circular(14),
+                // Same neon hairline + glow as the "First time here?" card, so
+                // the field never disappears into the mesh background.
+                border: Border.all(color: kNeonBlue.withValues(alpha: 0.55)),
+                boxShadow: [
+                  BoxShadow(
+                    color: kNeonBlue.withValues(alpha: 0.26),
+                    blurRadius: 18,
+                    spreadRadius: 1,
+                  ),
+                ],
+              ),
+              child: TextField(
+                controller: _ctrl,
+                focusNode: _focus,
+                textInputAction: TextInputAction.search,
+                onChanged: (v) => setState(() => _q = v),
+                onSubmitted: _commit,
+                decoration: InputDecoration(
+                  hintText: 'Search audios and playlists',
+                  hintStyle:
+                      TextStyle(color: scheme.onSurfaceVariant, fontSize: 14),
+                  prefixIcon: Icon(Icons.search,
+                      color: scheme.onSurfaceVariant, size: 20),
+                  suffixIcon: _q.isEmpty
+                      ? null
+                      : IconButton(
+                          icon: Icon(Icons.clear,
+                              color: scheme.onSurfaceVariant, size: 20),
+                          onPressed: () {
+                            _ctrl.clear();
+                            setState(() => _q = '');
+                            _focus.requestFocus();
+                          },
+                        ),
+                  border: InputBorder.none,
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                ),
+              ),
+            ),
+          ),
+          Expanded(
+            child: q.isEmpty
+                ? _emptyHint(scheme, store.tracks.isEmpty)
+                : (folders.isEmpty && tracks.isEmpty)
+                    ? _noResults(scheme, _q.trim())
+                    : ListView(
+                        padding: const EdgeInsets.only(bottom: 24),
+                        children: [
+                          if (folders.isNotEmpty) ...[
+                            _sectionLabel(context, 'Playlists'),
+                            for (final f in folders)
+                              ListTile(
+                                leading: Container(
+                                  width: 44,
+                                  height: 44,
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(8),
+                                    color: scheme.surfaceContainerHighest,
+                                  ),
+                                  child: Icon(Icons.queue_music,
+                                      color: scheme.onSurfaceVariant),
+                                ),
+                                title: Text(f.name),
+                                subtitle: Text(
+                                  '${store.tracks.where((t) => t.folderIds.contains(f.id)).length} audios',
+                                  style:
+                                      Theme.of(context).textTheme.bodySmall,
+                                ),
+                                onTap: () {
+                                  _commit(_q);
+                                  store.selectFolder(f.id);
+                                  if (!store.playlistsExpanded) {
+                                    store.togglePlaylists();
+                                  }
+                                },
+                              ),
+                          ],
+                          if (tracks.isNotEmpty) ...[
+                            _sectionLabel(context, 'Audios'),
+                            for (final t in tracks)
+                              TrackTile(
+                                track: t,
+                                all: tracks,
+                                onTap: () {
+                                  _commit(_q);
+                                  RtPlayer.I.play(t,
+                                      context: tracks, playingFrom: 'Search');
+                                },
+                              ),
+                          ],
+                        ],
+                      ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _sectionLabel(BuildContext context, String text) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+        child: Text(text,
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w700)),
+      );
+
+  Widget _emptyHint(ColorScheme scheme, bool noMusic) {
+    if (noMusic) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.search, size: 40, color: scheme.onSurfaceVariant),
+              const SizedBox(height: 12),
+              Text(
+                'Nothing to search yet. Add a reel first.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 14),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    final recent = AppStore.I.recentSearches;
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+      children: [
+        if (recent.isNotEmpty) ...[
+          Row(
+            children: [
+              Expanded(
+                child: Text('Recent searches',
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: scheme.onSurfaceVariant)),
+              ),
+              TextButton(
+                onPressed: AppStore.I.clearRecentSearches,
+                style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 8)),
+                child: const Text('Clear', style: TextStyle(fontSize: 12)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final term in recent)
+                ActionChip(
+                  label: Text(term,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12)),
+                  avatar: Icon(Icons.history,
+                      size: 15, color: scheme.onSurfaceVariant),
+                  onPressed: () => _use(term),
+                ),
+            ],
+          ),
+          const SizedBox(height: 22),
+        ],
+        Text('Type a name to search your audios and playlists.',
+            style: TextStyle(
+                color: scheme.onSurfaceVariant.withValues(alpha: 0.85),
+                fontSize: 13)),
+      ],
+    );
+  }
+
+  Widget _noResults(ColorScheme scheme, String q) => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Text('No matches for "$q".',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 14)),
+        ),
+      );
+}
+
+/// Deep blue sound-wave art behind every tab. A scrim on top keeps text
+/// readable over the brightest part of the art; light mode gets a lighter veil
+/// instead.
+class _AppBackground extends StatelessWidget {
+  const _AppBackground();
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Image.asset(
+          'assets/background.webp',
+          fit: BoxFit.cover,
+          filterQuality: FilterQuality.low,
+          errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+        ),
+        DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: dark
+                  ? const [
+                      Color(0x73070A12), // 45% at the header
+                      Color(0xA6070A12), // 65% through the lists
+                      Color(0xCC070A12), // 80% at the nav bar
+                    ]
+                  : const [
+                      Color(0xB8F7FAFF),
+                      Color(0xE6F7FAFF),
+                    ],
+              stops: dark ? const [0.0, 0.45, 1.0] : null,
+            ),
+          ),
+        ),
+      ],
+    );
   }
 }
 

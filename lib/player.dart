@@ -1,11 +1,11 @@
-// Playback engine: just_audio (+ just_audio_background) + ReelTune's
-// advanced looping. One process-wide player; the app always plays the same
-// track. Background playback / lock-screen & media widget come from
-// just_audio_background (MediaSession with MediaItem tags per track).
+// Playback engine: just_audio + ReelTune's advanced looping. One process-wide
+// player; the app always plays the same track.
 //
-// IMPORTANT: just_audio_background must finish init() BEFORE any AudioPlayer
-// exists — so the AudioPlayer is created inside _boot() and every public
-// player operation awaits _whenReady() first.
+// The lock-screen / notification-shade player is NOT a plugin: PlaybackService
+// (Kotlin) owns a MediaSessionCompat + MediaStyle notification and Dart pushes
+// the state into it through PlaybackNotification. That is deliberate —
+// audio_service never reached startForeground on this device, so the
+// notification silently never appeared.
 
 import 'dart:async';
 import 'dart:math';
@@ -13,12 +13,13 @@ import 'dart:math';
 import 'package:audio_session/audio_session.dart' as asess;
 import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
-import 'package:just_audio_background/just_audio_background.dart';
 
+import 'cover_art.dart';
 import 'entitlements.dart';
 import 'error_report.dart';
 import 'folder_access.dart';
 import 'library_sync.dart';
+import 'media_notification.dart';
 import 'models.dart';
 
 class RtPlayer extends ChangeNotifier {
@@ -77,36 +78,96 @@ class RtPlayer extends ChangeNotifier {
     return _booted && ap != null && ap.playing && current != null;
   }
 
-  /// Media-session service setup + player creation. Started right after
-  /// runApp() — never blocks the app launch. ColorOS can fail on first
-  /// attempt; retries happen lazily on the next play() via _boot().
-  Future<void> ensureBackgroundService() =>
-      _bgInit ??= JustAudioBackground.init(
-        androidNotificationChannelId: 'com.buildwithanshul.reeltunes.playback',
-        androidNotificationChannelName: 'ReelTunes playback',
-        // A dedicated white silhouette. The old default was the adaptive
-        // launcher icon, which Android rejects as a small icon — the media
-        // notification was posted but never appeared in the shade.
-        androidNotificationIcon: 'drawable/ic_stat_music',
-        androidNotificationOngoing: true,
-        // Keep the notification (and its play button) visible while paused so
-        // it does not vanish the moment the app is backgrounded.
-        androidStopForegroundOnPause: false,
+  /// Binds the native media session. Started right after runApp(), never
+  /// blocks the app launch, and playback does not depend on the result: with no
+  /// session the app still plays, it just has no shade/lock-screen controls.
+  Future<void> ensureBackgroundService() => _bgInit ??= _initMediaSession();
+
+  Future<void> _initMediaSession() async {
+    PlaybackNotification.onPlay = resume;
+    PlaybackNotification.onPause = pause;
+    PlaybackNotification.onToggle = toggle;
+    PlaybackNotification.onNext = skipNext;
+    PlaybackNotification.onPrevious = skipPrev;
+    PlaybackNotification.onStop = stopFromSystem;
+    PlaybackNotification.onSeek = seekToMillis;
+    final ok = await PlaybackNotification.init();
+    mediaSessionReady = ok;
+    mediaSessionFailed = !ok;
+    if (!ok) {
+      reportError(
+        'media session unavailable',
+        'PlaybackService did not answer',
+        null,
+        userMessage:
+            'Playback controls are unavailable. Allow notifications for '
+            'ReelTunes in Settings.',
       );
+    }
+    _pushMediaState();
+  }
+
+  /// True once the media session (notification + lock screen controls) is up.
+  bool mediaSessionReady = false;
+
+  /// True when the service refused to start on this phone. The Settings
+  /// notification row uses it to explain what to allow instead of silently
+  /// promising controls that never appear.
+  bool mediaSessionFailed = false;
+
+  /// Pushes one snapshot to the notification/lock screen. Called on every
+  /// transition (play, pause, track change, seek) — never on position ticks.
+  void _pushMediaState() {
+    final t = current;
+    final ap = _ap;
+    if (t == null || ap == null) {
+      unawaited(PlaybackNotification.clear());
+      return;
+    }
+    final total = ap.duration?.inMilliseconds ??
+        (t.durationMs > 0 ? t.durationMs : 0);
+    unawaited(PlaybackNotification.update(
+      id: t.id,
+      title: t.title,
+      artist: playingFrom.isNotEmpty && playingFrom != 'All'
+          ? '$playingFrom · ${t.source}'
+          : t.source,
+      album: playingFrom.isNotEmpty && playingFrom != 'All'
+          ? playingFrom
+          : 'ReelTunes',
+      cover: coverIndexFor(t.id),
+      playing: ap.playing,
+      positionMs: ap.position.inMilliseconds,
+      durationMs: total,
+      hasNext: queue.length > 1,
+      hasPrevious: queue.length > 1,
+    ));
+  }
 
   Future<void> _boot() async {
+    // The session is independent of the engine now, so this cannot hold
+    // playback hostage (the old audio_service init could hang on ColorOS).
+    unawaited(ensureBackgroundService());
+    // Android only routes audio into the media session (and shows the
+    // lock-screen player) when the app's audio session is configured for
+    // music.
     try {
-      await ensureBackgroundService();
-    } catch (e, s) {
-      // Media session unavailable — degrade to plain in-app playback.
-      reportError('media session init failed', e, s);
+      final session = await asess.AudioSession.instance;
+      await session.configure(const asess.AudioSessionConfiguration.music());
+    } catch (e) {
+      debugPrint('audio session configure failed: $e');
     }
     final ap = AudioPlayer(handleInterruptions: false);
     // Engine state is the single source of truth for the UI: play/pause
     // glyphs flip the instant the platform changes, no matter who initiated
     // it (mini bar, player sheet, notification, headset, interruption).
     ap.playerStateStream.listen((_) => _silentFire());
-    ap.playingStream.listen((_) => _silentFire());
+    ap.playingStream.listen((_) {
+      _silentFire();
+      // The notification's play/pause action must match reality even when the
+      // change came from an interruption or the end of the queue.
+      _pushMediaState();
+    });
     // Per-track loop steering (see _onPosition / _onIndexChange).
     ap.positionStream.listen(_onPosition);
     // Whole-queue end (only reachable on the last pass of the last item).
@@ -183,23 +244,12 @@ class RtPlayer extends ChangeNotifier {
   }
 
   /// Local files play from their path; SAF/content URIs (files imported
-  /// without an app-side copy) play straight from the URI.
+  /// without an app-side copy) play straight from the URI. The notification
+  /// metadata is pushed separately by [_pushMediaState], so no tag is needed.
   AudioSource _sourceFor(Track q) {
-    final tag = MediaItem(
-      id: q.id,
-      title: q.title,
-      artist: playingFrom.isNotEmpty && playingFrom != 'All'
-          ? '$playingFrom · ${q.source}'
-          : q.source,
-      album: playingFrom.isNotEmpty && playingFrom != 'All' ? playingFrom : null,
-      duration:
-          q.durationMs > 0 ? Duration(milliseconds: q.durationMs) : null,
-    );
     final path = q.path;
-    if (path.contains('://')) {
-      return AudioSource.uri(Uri.parse(path), tag: tag);
-    }
-    return AudioSource.file(path, tag: tag);
+    if (path.contains('://')) return AudioSource.uri(Uri.parse(path));
+    return AudioSource.file(path);
   }
 
   /// Loads the (shuffled) queue as one audio source so the media session has
@@ -230,10 +280,11 @@ class RtPlayer extends ChangeNotifier {
       // Draw this track's loop count AFTER loading, so the engine duration
       // (and therefore Smart's short-clip boost) is already known.
       _newTrackLoops();
-      // JustAudioBackground-style play(): the future completes when playback
-      // STOPS, so awaiting it here would freeze every subsequent state update.
+      // just_audio's play() completes when playback STOPS, so awaiting it here
+      // would freeze every subsequent state update.
       unawaited(_ap!.play());
       _loadFailures = 0;
+      _pushMediaState();
     } catch (e, s) {
       // A lapsed SAF grant looks exactly like a broken file: the audios are
       // on disk, but every content:// path fails to open ("Source error").
@@ -332,13 +383,51 @@ class RtPlayer extends ChangeNotifier {
       // play() completes only when playback stops — never await it.
       unawaited(ap.play());
     }
+    _pushMediaState();
+    _silentFire();
+  }
+
+  /// Explicit resume, used by the notification's play action (toggle would flip
+  /// to pause if the shade and the engine ever disagreed).
+  Future<void> resume() async {
+    if (current == null) return;
+    await _whenReady();
+    unawaited(_ap!.play());
+    _pushMediaState();
+    _silentFire();
+  }
+
+  Future<void> pause() async {
+    if (current == null) return;
+    await _whenReady();
+    await _ap!.pause();
+    _pushMediaState();
+    _silentFire();
+  }
+
+  /// Notification "stop"/swipe-away: pause and drop the controls.
+  Future<void> stopFromSystem() async {
+    if (current == null) return;
+    await _whenReady();
+    await _ap!.pause();
+    await PlaybackNotification.clear();
     _silentFire();
   }
 
   Future<void> seek(double fraction) async {
     await _whenReady();
     final d = _ap!.duration;
-    if (d != null) await _ap!.seek(d * fraction);
+    if (d != null) {
+      await _ap!.seek(d * fraction);
+      _pushMediaState();
+    }
+  }
+
+  /// Absolute seek from the lock-screen scrubber.
+  Future<void> seekToMillis(int ms) async {
+    await _whenReady();
+    await _ap!.seek(Duration(milliseconds: ms));
+    _pushMediaState();
   }
 
   /// User skip: losing the remaining loops of the current track is by
@@ -362,6 +451,7 @@ class RtPlayer extends ChangeNotifier {
       queueIndex = next;
       await _startCurrent();
     }
+    _pushMediaState();
   }
 
   Future<void> skipPrev() async {
@@ -384,6 +474,7 @@ class RtPlayer extends ChangeNotifier {
       reportError('previous failed', e, s);
       await _ap!.seek(Duration.zero);
     }
+    _pushMediaState();
   }
 
   void setLoop(RtLoop m) {
@@ -501,6 +592,7 @@ class RtPlayer extends ChangeNotifier {
     final loaded = current;
     if (loaded != null) AppStore.I.setLastPlayedId(loaded.id);
     _newTrackLoops();
+    _pushMediaState();
     _silentFire();
   }
 
@@ -526,6 +618,7 @@ class RtPlayer extends ChangeNotifier {
     } catch (e, s) {
       reportError('wrap-around failed', e, s);
     }
+    _pushMediaState();
     _silentFire();
   }
 
@@ -617,6 +710,11 @@ class RtPlayer extends ChangeNotifier {
       }
     } finally {
       _queueSurgery = false;
+      if (current == null) {
+        unawaited(PlaybackNotification.clear());
+      } else {
+        _pushMediaState();
+      }
       _silentFire();
     }
   }

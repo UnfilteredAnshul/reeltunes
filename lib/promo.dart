@@ -46,7 +46,6 @@ class PromoCode {
     this.notes = '',
     this.revoked = false,
     required this.createdAtMs,
-    this.builtIn = false,
   });
 
   final String code;
@@ -63,7 +62,6 @@ class PromoCode {
   final String notes;
   bool revoked;
   final int createdAtMs;
-  final bool builtIn;
 
   DateTime? get expiresAt => expiresAtMs == null
       ? null
@@ -71,23 +69,6 @@ class PromoCode {
 
   bool get expired => expiresAt != null && DateTime.now().isAfter(expiresAt!);
   bool get exhausted => maxUses > 0 && uses >= maxUses;
-  bool get usable => !revoked && !expired && !exhausted;
-
-  String get typeLabel => switch (type) {
-    'master' => 'Lifetime Pro',
-    'reset' => 'Reset to Free',
-    'pro_long' => 'Long Pro grant',
-    _ => 'Pro grant',
-  };
-
-  String get grantLabel {
-    if (type == 'master') return 'Pro forever';
-    if (type == 'reset') return 'Back to Free';
-    if (days == 1) return '1 day Pro';
-    return '$days days Pro';
-  }
-
-  String get usesLabel => maxUses == 0 ? '$uses used' : '$uses / $maxUses';
 
   Map<String, dynamic> toMap() => {
     'code': code,
@@ -135,72 +116,17 @@ class PromoEngine extends ChangeNotifier {
   static const String resetCode = 'FREEVERSION';
 
   static const int _logLimit = 500;
-  static const String _alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
   SharedPreferences? _prefs;
   final List<PromoCode> _codes = [];
   final List<Map<String, dynamic>> _log = [];
   String _deviceId = '';
   String _installId = '';
-  bool _adminUnlocked = false;
   bool _ready = false;
 
-  // Server-backed dashboard state. _codes/_log stay the local/offline
-  // registry; when a token is connected the screen reads these instead.
-  String _serverToken = '';
-  bool _serverOnline = false;
-  bool _serverLoaded = false;
-  final List<PromoCode> _serverCodes = [];
-  final List<Map<String, dynamic>> _serverRedemptions = [];
-  Map<String, dynamic>? _serverStats;
-
   bool get ready => _ready;
-  bool get adminUnlocked => _adminUnlocked;
   String get deviceId => _deviceId;
   String get installId => _installId;
-
-  bool get serverConnected => _serverToken.isNotEmpty;
-  bool get serverOnline => _serverOnline;
-  bool get serverLoaded => _serverLoaded;
-  String get serverHost => Uri.parse(PromoApi.baseUrl).host;
-  Map<String, dynamic>? get serverStats => _serverStats;
-
-  /// Short, non-identifying device tag for the log. The real server uses SSAID;
-  /// this is only here so two test phones are distinguishable.
-  String get deviceShort =>
-      _deviceId.length >= 6 ? _deviceId.substring(0, 6) : _deviceId;
-
-  /// Built-ins are not rows: they cannot be edited, revoked or counted.
-  List<PromoCode> get builtIns => [
-    PromoCode(
-      code: masterCode,
-      type: 'master',
-      createdAtMs: 0,
-      builtIn: true,
-      notes: kDebugMode
-          ? 'Unlocks lifetime Pro on this device.'
-          : 'Unavailable in release builds.',
-    ),
-    PromoCode(
-      code: resetCode,
-      type: 'reset',
-      createdAtMs: 0,
-      builtIn: true,
-      notes: 'Drops this device back to Free for testing.',
-    ),
-  ];
-
-  List<PromoCode> get codes => _serverLoaded
-      ? List.unmodifiable(_serverCodes)
-      : List.unmodifiable(_codes);
-
-  List<Map<String, dynamic>> get redemptions => _serverLoaded
-      ? List.unmodifiable(_serverRedemptions)
-      : List.unmodifiable(_log);
-
-  int get codeCount => codes.length;
-  int get liveCodeCount => codes.where((c) => c.usable).length;
-  int get redemptionCount => redemptions.length;
 
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
@@ -216,8 +142,6 @@ class PromoEngine extends ChangeNotifier {
       _installId = _newDeviceId();
       await prefs.setString('promoInstallId', _installId);
     }
-    _serverToken = prefs.getString('promoCodesToken') ?? '';
-    _adminUnlocked = prefs.getBool('adminUnlocked') ?? false;
 
     _codes
       ..clear()
@@ -232,9 +156,6 @@ class PromoEngine extends ChangeNotifier {
           (m) => m is Map ? Map<String, dynamic>.from(m) : null,
         ),
       );
-
-    // A master grant from an earlier install unlocks the dashboard too.
-    if (Entitlements.I.codeGrantLifetime) _adminUnlocked = true;
 
     _ready = true;
     notifyListeners();
@@ -275,7 +196,6 @@ class PromoEngine extends ChangeNotifier {
         return PromoResult.ok('This device is already Pro');
       }
       await Entitlements.I.setCodeGrant(lifetime: true, code: code);
-      await unlockAdmin(true);
       await _logRedemption(code, lifetime: true);
       return PromoResult.ok('Pro unlocked on this device');
     }
@@ -288,7 +208,6 @@ class PromoEngine extends ChangeNotifier {
         deviceId: _deviceId,
         installId: _installId,
       );
-      _serverOnline = true;
       if (!remote.ok) {
         return PromoResult.fail(
           remote.message.isEmpty ? "That code isn't valid" : remote.message,
@@ -296,8 +215,6 @@ class PromoEngine extends ChangeNotifier {
       }
       return await _applyRemote(remote);
     } on PromoApiException catch (e) {
-      _serverOnline = false;
-      notifyListeners();
       // Offline: codes created on this device still work. Server codes are
       // never cached as code strings, so a revoked code cannot be replayed.
       final local = await _redeemLocal(code);
@@ -310,7 +227,6 @@ class PromoEngine extends ChangeNotifier {
     final code = remote.code.isEmpty ? normalize(remote.data['code'] ?? '') : remote.code;
     if (remote.lifetime) {
       await Entitlements.I.setCodeGrant(lifetime: true, code: code);
-      if (remote.type == 'master') await unlockAdmin(true);
     } else {
       if (remote.days <= 0) return PromoResult.fail("That code isn't valid");
       final until = Entitlements.I.codeGrantBase.add(Duration(days: remote.days));
@@ -345,7 +261,6 @@ class PromoEngine extends ChangeNotifier {
         return PromoResult.ok('This device is already Pro');
       }
       await Entitlements.I.setCodeGrant(lifetime: true, code: code);
-      await unlockAdmin(true);
     } else {
       if (row.days <= 0) return PromoResult.fail("That code isn't valid");
       // Extend an active grant, otherwise start from now. Never shorten.
@@ -370,85 +285,7 @@ class PromoEngine extends ChangeNotifier {
     return 'Pro until ${_fmt(end)}';
   }
 
-  // ---- backend dashboard -------------------------------------------------
-
-  Future<PromoResult> connectServer(String token) async {
-    final clean = token.trim();
-    if (clean.isEmpty) return PromoResult.fail('Paste the admin token');
-    final bool ok;
-    try {
-      ok = await PromoApi.I.checkToken(clean);
-    } on PromoApiException catch (e) {
-      return PromoResult.fail(e.message);
-    }
-    if (!ok) return PromoResult.fail('Token rejected');
-    _serverToken = clean;
-    _serverOnline = true;
-    await _prefs?.setString('promoCodesToken', clean);
-    final refreshed = await refreshServer();
-    if (!refreshed.ok) return refreshed;
-    notifyListeners();
-    return PromoResult.ok('Connected to $serverHost');
-  }
-
-  Future<void> disconnectServer() async {
-    _serverToken = '';
-    _serverOnline = false;
-    _serverLoaded = false;
-    _serverCodes.clear();
-    _serverRedemptions.clear();
-    _serverStats = null;
-    await _prefs?.remove('promoCodesToken');
-    notifyListeners();
-  }
-
-  /// Pulls the shared registry, recent redemptions and counters.
-  Future<PromoResult> refreshServer() async {
-    if (!serverConnected) return PromoResult.fail('Not connected');
-    try {
-      final codes = await PromoApi.I.fetchDashboard(_serverToken);
-      if (!codes.ok) return PromoResult.fail(codes.message);
-      final redemptions = await PromoApi.I.fetchRedemptions(_serverToken);
-      final stats = await PromoApi.I.fetchStats(_serverToken);
-
-      _serverCodes
-        ..clear()
-        ..addAll([
-          for (final raw in (codes.data['codes'] as List? ?? const []))
-            if (PromoCode.fromMap(raw) case final PromoCode row) row,
-        ]);
-      _serverRedemptions
-        ..clear()
-        ..addAll([
-          for (final raw in (redemptions.data['redemptions'] as List? ?? const []))
-            if (raw is Map)
-              {
-                'code': raw['code']?.toString() ?? '',
-                'device':
-                    raw['deviceId']?.toString() ??
-                    raw['deviceShort']?.toString() ??
-                    '',
-                'atMs': (raw['redeemedAtMs'] as num?)?.toInt() ?? 0,
-                'lifetime': raw['lifetime'] == true,
-                'untilMs': (raw['untilMs'] as num?)?.toInt(),
-              },
-        ]);
-      final rawStats = stats.data['stats'];
-      _serverStats = rawStats is Map
-          ? Map<String, dynamic>.from(rawStats)
-          : null;
-      _serverOnline = true;
-      _serverLoaded = true;
-      notifyListeners();
-      return PromoResult.ok('Dashboard updated');
-    } on PromoApiException catch (e) {
-      _serverOnline = false;
-      notifyListeners();
-      return PromoResult.fail(e.message);
-    }
-  }
-
-  // ---- admin (the in-app dashboard) --------------------------------------
+  // ---- grant effects -----------------------------------------------------
 
   /// Applies the owner's "Remove effects" switch to this install.
   ///
@@ -473,146 +310,6 @@ class PromoEngine extends ChangeNotifier {
     }
   }
 
-  Future<void> unlockAdmin(bool value) async {
-    _adminUnlocked = value;
-    await _prefs?.setBool('adminUnlocked', value);
-    notifyListeners();
-  }
-
-  /// Creates a code. With no [custom] string one is generated (`RT` + 8).
-  /// The returned message is the code itself on success.
-  Future<PromoResult> createCode({
-    required String type,
-    int days = 30,
-    int maxUses = 0,
-    int? validForDays,
-    String campaign = '',
-    String notes = '',
-    String? custom,
-  }) async {
-    if (serverConnected) {
-      try {
-        final res = await PromoApi.I.createCode(
-          _serverToken,
-          type: type,
-          days: days,
-          maxUses: maxUses,
-          validForDays: validForDays ?? 0,
-          campaign: campaign,
-          notes: notes,
-          code: custom,
-        );
-        if (!res.ok) {
-          return PromoResult.fail(
-            res.message.isEmpty ? 'Could not create the code' : res.message,
-          );
-        }
-        await refreshServer();
-        return PromoResult.ok(res.code);
-      } on PromoApiException catch (e) {
-        return PromoResult.fail(e.message);
-      }
-    }
-
-    final String code;
-    final trimmed = (custom ?? '').trim();
-    if (trimmed.isNotEmpty) {
-      code = normalize(trimmed);
-      if (code.length < 4 || code.length > 24) {
-        return PromoResult.fail('Code needs 4–24 characters');
-      }
-      if (!RegExp(r'^[A-Z0-9]+$').hasMatch(code)) {
-        return PromoResult.fail('Letters and numbers only');
-      }
-      if (_find(code) != null || code == masterCode || code == resetCode) {
-        return PromoResult.fail('That code already exists');
-      }
-    } else {
-      code = _generateUnique();
-    }
-
-    if (type != 'master' && days <= 0) {
-      return PromoResult.fail('Grant must be at least 1 day');
-    }
-
-    _codes.insert(
-      0,
-      PromoCode(
-        code: code,
-        type: type,
-        days: type == 'master' ? 0 : days,
-        maxUses: maxUses < 0 ? 0 : maxUses,
-        expiresAtMs: validForDays == null || validForDays <= 0
-            ? null
-            : DateTime.now()
-                  .add(Duration(days: validForDays))
-                  .millisecondsSinceEpoch,
-        campaign: campaign.trim(),
-        notes: notes.trim(),
-        createdAtMs: DateTime.now().millisecondsSinceEpoch,
-      ),
-    );
-    await _persist();
-    return PromoResult.ok(code);
-  }
-
-  Future<PromoResult> setRevoked(String code, bool revoked) async {
-    if (serverConnected) {
-      try {
-        final res = await PromoApi.I.setRevoked(_serverToken, code, revoked);
-        if (!res.ok) return PromoResult.fail(res.message);
-        await refreshServer();
-        return PromoResult.ok(revoked ? 'Code revoked' : 'Code switched on');
-      } on PromoApiException catch (e) {
-        return PromoResult.fail(e.message);
-      }
-    }
-    final row = _find(code);
-    if (row == null) return PromoResult.fail('Code not found');
-    row.revoked = revoked;
-    await _persist();
-    return PromoResult.ok(revoked ? 'Code revoked' : 'Code switched on');
-  }
-
-  Future<PromoResult> deleteCode(String code) async {
-    if (serverConnected) {
-      try {
-        final res = await PromoApi.I.deleteCode(_serverToken, code);
-        if (!res.ok) return PromoResult.fail(res.message);
-        await refreshServer();
-        return PromoResult.ok('Code deleted');
-      } on PromoApiException catch (e) {
-        return PromoResult.fail(e.message);
-      }
-    }
-    _codes.removeWhere((c) => c.code == code);
-    await _persist();
-    return PromoResult.ok('Code deleted');
-  }
-
-  Future<PromoResult> revokeAll() async {
-    if (serverConnected) {
-      try {
-        final res = await PromoApi.I.revokeAll(_serverToken);
-        if (!res.ok) return PromoResult.fail(res.message);
-        await refreshServer();
-        return PromoResult.ok('All codes revoked');
-      } on PromoApiException catch (e) {
-        return PromoResult.fail(e.message);
-      }
-    }
-    for (final c in _codes) {
-      c.revoked = true;
-    }
-    await _persist();
-    return PromoResult.ok('All codes revoked');
-  }
-
-  Future<void> clearLog() async {
-    _log.clear();
-    await _persist();
-  }
-
   // ---- helpers -----------------------------------------------------------
 
   /// Uppercase, strip spaces/dashes/underscores. No 0→O mapping: real codes
@@ -625,27 +322,6 @@ class PromoEngine extends ChangeNotifier {
       if (c.code == normalized) return c;
     }
     return null;
-  }
-
-  String _generateUnique() {
-    for (var attempt = 0; attempt < 40; attempt++) {
-      final code = 'RT${_randomChars(8)}';
-      if (_find(code) == null && code != masterCode && code != resetCode) {
-        return code;
-      }
-    }
-    // Practically unreachable; keeps the compiler happy.
-    return 'RT${DateTime.now().millisecondsSinceEpoch.toRadixString(36).toUpperCase()}';
-  }
-
-  String _randomChars(int length) {
-    final rnd = Random.secure();
-    return String.fromCharCodes(
-      List.generate(
-        length,
-        (_) => _alphabet.codeUnitAt(rnd.nextInt(_alphabet.length)),
-      ),
-    );
   }
 
   String _newDeviceId() {

@@ -10,7 +10,6 @@ import 'package:flutter/material.dart';
 
 import 'ads.dart';
 import 'coins.dart';
-import 'entitlements.dart';
 import 'top_toast.dart';
 
 const Color coinGold = Color(0xFFD9A400);
@@ -89,16 +88,20 @@ class _ShopSheetState extends State<_ShopSheet> {
     if (_busy) return;
     setState(() => _busy = true);
     try {
-      final earned = await Ads.I.showRewarded();
+      final outcome = await Ads.I.showRewarded();
       if (!mounted) return;
-      if (earned) {
-        await CoinWallet.I.addFromAd();
-        if (mounted) {
-          showTopToast(context, '+${CoinWallet.coinsPerAd} coin');
-        }
-      } else {
-        showTopToast(context, 'No ad available right now — try again.',
-            error: true);
+      switch (outcome) {
+        case RewardedOutcome.earned:
+          await CoinWallet.I.addFromAd();
+          if (mounted) {
+            showTopToast(context, '+${CoinWallet.coinsPerAd} coin');
+          }
+        case RewardedOutcome.dismissedEarly:
+          showTopToast(context, 'Watch the whole video to earn the coin.',
+              error: true);
+        case RewardedOutcome.unavailable:
+          showTopToast(context, 'No ad available right now — try again.',
+              error: true);
       }
     } finally {
       if (mounted) setState(() => _busy = false);

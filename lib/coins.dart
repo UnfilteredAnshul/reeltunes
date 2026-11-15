@@ -332,9 +332,6 @@ class CoinWallet extends ChangeNotifier {
     notifyListeners();
   }
 
-  static DateTime? _dateFrom(int? ms) =>
-      ms != null && ms > 0 ? DateTime.fromMillisecondsSinceEpoch(ms) : null;
-
   Future<void> _savePerk(String id) async {
     final ms = _perkExpiry[id];
     if (ms == null) return;

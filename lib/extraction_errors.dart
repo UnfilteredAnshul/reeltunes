@@ -169,13 +169,68 @@ const List<DownloadErrorHelp> downloadErrorHelp = [
   ),
 ];
 
-/// The guide entry that best matches an extraction error, or null.
-DownloadErrorHelp? downloadErrorFor(Object error) {
-  final raw = error.toString().toLowerCase();
-  for (final entry in downloadErrorHelp) {
-    for (final word in entry.keywords) {
-      if (raw.contains(word)) return entry;
-    }
-  }
-  return null;
-}
+/// Everything that can go wrong outside the download pipeline, in plain words.
+/// The guide lists these after the download errors so a user with any error
+/// message can find an explanation. Release builds never show the technical
+/// text itself — only these sentences.
+const List<DownloadErrorHelp> appErrorHelp = [
+  DownloadErrorHelp(
+    'Playback will not start',
+    'Android sometimes refuses to hand over the audio session, usually right '
+        'after a reboot or when battery saver is on. Tap play again. If it '
+        'still does nothing, open Settings → Apps → ReelTunes → Battery and set '
+        'it to "unrestricted", then reopen the app.',
+    ['audio handler', 'media session', 'playback', 'stuck', 'play', 'session',
+      'initialise', 'initialize', 'timer'],
+  ),
+  DownloadErrorHelp(
+    'No controls in the notification shade',
+    'Notifications for ReelTunes are switched off in Android, so the player '
+        'cannot post its controls. Open Settings → Apps → ReelTunes → '
+        'Notifications and allow them. Music keeps playing either way.',
+    ['notification', 'shade', 'lock screen', 'controls', 'foreground'],
+  ),
+  DownloadErrorHelp(
+    'An ad did not load',
+    'There is no ad available for this moment (AdMob fills ads at random). '
+        'Nothing is lost: imports and playback never wait for an ad, and no '
+        'coins are taken. Try again in a few minutes, or check the connection.',
+    ['ad', 'admob', 'rewarded', 'coins', 'no ad', 'fill'],
+  ),
+  DownloadErrorHelp(
+    'A playlist or audio is missing',
+    'On the free plan, ReelTunes shows the 2 newest playlists and the 25 '
+        'newest audios. Anything above that stays on the phone and comes back '
+        'as soon as you upgrade or buy extra slots — nothing is deleted.',
+    ['missing', 'hidden', 'free plan', 'cap', 'limit', 'playlist', '25'],
+  ),
+  DownloadErrorHelp(
+    'The audios folder stopped working',
+    'Android revoked access to the folder (reinstall, permission reset, or a '
+        'system clean-up). Open Settings → Audios folder, pick the same folder '
+        'again and your library links itself back up.',
+    ['folder', 'access', 'permission', 'relink', 'revoked', 'grant'],
+  ),
+  DownloadErrorHelp(
+    'Import found no files',
+    'The picked place had no audio or video ReelTunes can read. Videos stored '
+        'inside an archive or a cloud-only folder cannot be read offline. Move '
+        'the file onto the phone first, then import it again.',
+    ['import', 'no files', 'empty', 'nothing found', 'cloud'],
+  ),
+  DownloadErrorHelp(
+    'A purchase did not unlock',
+    'Google Play may still be confirming the payment. Wait a minute, then open '
+        'the coin shop and tap Restore. If it stays locked, check that the Play '
+        'account is the one that paid.',
+    ['purchase', 'billing', 'subscription', 'restore', 'play store', 'pro'],
+  ),
+  DownloadErrorHelp(
+    'Sharing a link does not open ReelTunes',
+    'The share sheet only lists apps that accept links. Copy the link instead '
+        'and paste it into Add reel — that always works, even for apps that do '
+        'not offer ReelTunes in their share list.',
+    ['share', 'intent', 'link', 'paste', 'share sheet'],
+  ),
+];
+

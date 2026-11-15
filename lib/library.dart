@@ -9,11 +9,12 @@ import 'package:reorderable_grid_view/reorderable_grid_view.dart';
 
 import 'ads.dart';
 import 'coins.dart';
+import 'cover_art.dart';
 import 'entitlements.dart';
+import 'first_time_card.dart';
 import 'folder_access.dart';
 import 'models.dart';
 import 'player.dart';
-import 'settings_screen.dart';
 import 'sheets.dart';
 import 'shop_sheet.dart';
 import 'top_toast.dart';
@@ -34,7 +35,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
   Timer? _collapseTimer;
   DateTime _nextNudge = DateTime.now().add(const Duration(seconds: 7));
   bool _importExpanded = false;
-  String _filter = 'all';
 
   /// Rewarded ad in flight (disables the gold FAB so a double tap cannot open
   /// two full-screen ads).
@@ -42,7 +42,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
   // ---- name search ----
   final _searchCtrl = TextEditingController();
-  bool _searchOpen = false;
 
   @override
   void initState() {
@@ -99,16 +98,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
     });
   }
 
-  void _toggleSearch() {
-    setState(() {
-      _searchOpen = !_searchOpen;
-      if (!_searchOpen) {
-        _searchCtrl.clear();
-        AppStore.I.setSearchQuery('');
-      }
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
     final store = AppStore.I;
@@ -124,7 +113,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
         final scheme = Theme.of(context).colorScheme;
         final selected = store.selectedFolderId;
         return Scaffold(
-          backgroundColor: scheme.surface,
+          // Transparent: RootScreen draws the mesh art behind every tab.
+          backgroundColor: Colors.transparent,
           appBar: AppBar(
             backgroundColor: Colors.transparent,
             elevation: 0,
@@ -140,12 +130,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 CoinBalanceChip(onTap: () => showShopSheet(context)),
                 const SizedBox(width: 4),
               ],
-              IconButton(
-                tooltip: 'Settings',
-                icon: const Icon(Icons.settings_outlined),
-                onPressed: () => Navigator.push(context,
-                    MaterialPageRoute(builder: (_) => SettingsScreen())),
-              ),
             ],
           ),
           body: CustomScrollView(
@@ -156,12 +140,22 @@ class _LibraryScreenState extends State<LibraryScreen> {
                     padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
                     child: Container(
                       decoration: BoxDecoration(
-                        color: scheme.surfaceContainerHighest.withOpacity(0.3),
+                        color: scheme.surfaceContainerHighest.withValues(alpha: 0.42),
                         borderRadius: BorderRadius.circular(14),
+                        // Same neon hairline + glow as the Search tab, so the
+                        // field never disappears into the background art.
+                        border: Border.all(
+                            color: kNeonBlue.withValues(alpha: 0.55)),
+                        boxShadow: [
+                          BoxShadow(
+                            color: kNeonBlue.withValues(alpha: 0.26),
+                            blurRadius: 18,
+                            spreadRadius: 1,
+                          ),
+                        ],
                       ),
                       child: TextField(
                         controller: _searchCtrl,
-                        autofocus: _searchOpen,
                         textInputAction: TextInputAction.search,
                         decoration: InputDecoration(
                           hintText: 'Search your sounds…',
@@ -187,68 +181,14 @@ class _LibraryScreenState extends State<LibraryScreen> {
                     ),
                   ),
                 ),
-              // Filter chips (All / Recently Added / Playlists)
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-                  child: Row(children: [
-                    FilterChip(
-                      label: const Text('All'),
-                      selected: _filter == 'all',
-                      onSelected: (v) => setState(() => _filter = 'all'),
-                      showCheckmark: false,
-                      selectedColor: scheme.primary,
-                      labelStyle: TextStyle(
-                          color: _filter == 'all'
-                              ? Colors.white
-                              : scheme.onSurfaceVariant,
-                          fontWeight: FontWeight.w600),
-                    ),
-                    const SizedBox(width: 10),
-                    FilterChip(
-                      label: const Text('Recently Added'),
-                      selected: _filter == 'recent',
-                      onSelected: (v) => setState(() => _filter = 'recent'),
-                      showCheckmark: false,
-                      selectedColor: scheme.primary,
-                      labelStyle: TextStyle(
-                          color: _filter == 'recent'
-                              ? Colors.white
-                              : scheme.onSurfaceVariant,
-                          fontWeight: FontWeight.w600),
-                    ),
-                    const SizedBox(width: 10),
-                    FilterChip(
-                      label: const Text('Playlists'),
-                      selected: _filter == 'playlists',
-                      onSelected: (v) => setState(() => _filter = 'playlists'),
-                      showCheckmark: false,
-                      selectedColor: scheme.primary,
-                      labelStyle: TextStyle(
-                          color: _filter == 'playlists'
-                              ? Colors.white
-                              : scheme.onSurfaceVariant,
-                          fontWeight: FontWeight.w600),
-                    ),
-                    const Spacer(),
-                    IconButton(
-                      tooltip: 'Sort & filter',
-                      icon: const Icon(Icons.tune),
-                      onPressed: () => showSortFilterSheet(context),
-                    ),
-                  ]),
-                ),
-              ),
-              // Folder strip (playlists without emojis)
-              if (store.folders.isNotEmpty)
-                SliverToBoxAdapter(
-                  child: _FolderStrip(),
-                ),
+              // The All / Recently Added / Playlists chip row is gone. All
+              // audios is the default view, playlists have their own section
+              // below, and date filtering lives in the sort sheet.
               if (store.anyArranging)
                 SliverToBoxAdapter(
                     child: _RearrangeBanner(folders: store.arrangingFolders)),
               if (!store.guideBannerDismissed)
-                const SliverToBoxAdapter(child: _GuideBar()),
+                const SliverToBoxAdapter(child: FirstTimeCard(tight: true)),
               if (store.folders.isNotEmpty)
                 SliverPadding(
                   padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
@@ -308,14 +248,12 @@ class _LibraryScreenState extends State<LibraryScreen> {
                       ),
                     ),
                     IconButton(
-                      tooltip: store.sortBy == SortBy.manual &&
-                              store.dateFilter == DateFilter.any
-                          ? 'Sort and filter'
-                          : 'Sort and filter (active)',
+                      tooltip: store.activeSortBy == SortBy.manual
+                          ? 'Sort'
+                          : 'Sort (active)',
                       onPressed: () => showSortFilterSheet(context),
-                      icon: Icon(Icons.tune,
-                          color: store.sortBy != SortBy.manual ||
-                                  store.dateFilter != DateFilter.any
+                      icon: Icon(Icons.sort,
+                          color: store.activeSortBy != SortBy.manual
                               ? Theme.of(context).colorScheme.primary
                               : null),
                     ),
@@ -412,8 +350,36 @@ class _LibraryScreenState extends State<LibraryScreen> {
               const SliverToBoxAdapter(child: SizedBox(height: 96)),
             ],
           ),
-        );
-      },
+        floatingActionButton: SizedBox(
+          width: 200,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              if (Entitlements.I.shopAvailable) ...[
+                _WatchAdFab(
+                  expanded: _importExpanded,
+                  busy: _adBusy,
+                  onPressed: _watchAd,
+                ),
+                const SizedBox(height: 12),
+              ],
+              _ImportFab(
+                expanded: _importExpanded,
+                onPressed: _openImportSheet,
+              ),
+              const SizedBox(height: 12),
+              FloatingActionButton.extended(
+                heroTag: 'addReelLibrary',
+                onPressed: _openAddReel,
+                label: const Text('Add reel'),
+                icon: const Icon(Icons.add_link),
+              ),
+            ],
+          ),
+        ),
+      );
+    },
       ),
     );
   }
@@ -425,102 +391,14 @@ class _LibraryScreenState extends State<LibraryScreen> {
     _noteInteraction();
     setState(() => _adBusy = true);
     try {
-      final earned = await Ads.I.showRewarded();
-      if (!mounted) return;
-      if (earned) {
-        await CoinWallet.I.addFromAd();
-        if (mounted) {
-          showTopToast(
-              context, '+${CoinWallet.coinsPerAd} coin${CoinWallet.coinsPerAd == 1 ? '' : 's'}');
-        }
-      } else {
-        showTopToast(context, 'No ad available right now — try again.',
-            error: true);
-      }
+      await watchRewardedAd(context);
     } finally {
       if (mounted) setState(() => _adBusy = false);
     }
   }
 
-  /// Import intake: pick files (audio AND video) or a whole folder of
-  /// videos. Videos play their audio track directly — the file is never
-  /// touched: not copied, not deleted, zero storage waste.
-  Future<void> _openImportSheet() async {
-    if (Entitlements.I.importBlockReason(AppStore.I.tracks.length) != null) {
-      showPaywallSheet(context,
-          reason: 'Free tier holds ${Entitlements.I.maxTracks} audios');
-      return;
-    }
-    final choice = await showModalBottomSheet<String>(
-      context: context,
-      showDragHandle: true,
-      useSafeArea: true,
-      builder: (c) => SafeArea(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          ListTile(
-            leading: const Icon(Icons.audiotrack_outlined),
-            title: const Text('Import one file'),
-            subtitle: const Text(
-                'Pick a song or a video. Videos play as audio.',
-                style: TextStyle(fontSize: 12)),
-            onTap: () => Navigator.pop(c, 'single'),
-          ),
-          ListTile(
-            leading: const Icon(Icons.library_music_outlined),
-            title: const Text('Import several files'),
-            subtitle: const Text(
-                'Pick as many as you like. Only the newest 25 are added on '
-                'the free plan.',
-                style: TextStyle(fontSize: 12)),
-            onTap: () => Navigator.pop(c, 'files'),
-          ),
-          ListTile(
-            leading: const Icon(Icons.video_library_outlined),
-            title: const Text('Import a folder'),
-            subtitle: const Text(
-                'Every audio and video in the folder. The newest 25 are added '
-                'on the free plan.',
-                style: TextStyle(fontSize: 12)),
-            onTap: () => Navigator.pop(c, 'folder'),
-          ),
-          const SizedBox(height: 6),
-        ]),
-      ),
-    );
-    if (choice == null || !mounted) return;
-
-    // Free tier: one download/import ad per audio. Replaces the loading /
-    // importing moment — the ad runs first, the import starts after.
-    if (Entitlements.I.showAds) {
-      final earned = await Ads.I.showDownloadAd();
-      if (!mounted) return;
-      if (!earned) {
-        showTopToast(context,
-            'Ad didn\'t load — proceeding with the import anyway.');
-      }
-    }
-
-    try {
-      final n = switch (choice) {
-        'single' => (await importMediaFile(context) == null ? 0 : 1),
-        'files' => await importMediaFiles(context),
-        _ => await importMediaFolder(context),
-      };
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(n == 0
-            ? 'No audio or video files found there'
-            : 'Imported $n ${n == 1 ? 'audio' : 'audios'}'),
-        behavior: SnackBarBehavior.floating,
-      ));
-    } catch (e) {
-      // Say WHY it failed (denied access, unreadable folder…) rather than
-      // claiming nothing was found, which was a lie about the folder.
-      debugPrint('import failed: $e');
-      if (!mounted) return;
-      showTopToast(context, "Couldn't open that folder. Try again.");
-    }
-  }
+  /// Import intake: delegates to the shared [openImportSheet] flow.
+  Future<void> _openImportSheet() => openImportSheet(context);
 
   /// "Add reel" from the FAB: paywall at the Free cap before the sheet opens.
   /// The download/import ad fires inside AddReelSheet._extract() / _openImportSheet(),
@@ -603,134 +481,6 @@ class _RearrangeBanner extends StatelessWidget {
   }
 }
 
-/// One-time bar above the playlist strip: a single tap opens the same guide
-/// that lives in Settings.
-class _GuideBar extends StatelessWidget {
-  const _GuideBar();
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-      child: Material(
-        color: scheme.secondaryContainer,
-        borderRadius: BorderRadius.circular(14),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 4, 4, 4),
-          child: Row(children: [
-            Icon(Icons.lightbulb_outline,
-                size: 20, color: scheme.onSecondaryContainer),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text('First time here? Here is how it works.',
-                  style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: scheme.onSecondaryContainer)),
-            ),
-            TextButton(
-              onPressed: () {
-                AppStore.I.dismissGuideBanner();
-                showGuideSheet(context);
-              },
-              child: const Text('Guide'),
-            ),
-            IconButton(
-              tooltip: 'Close',
-              visualDensity: VisualDensity.compact,
-              onPressed: () => AppStore.I.dismissGuideBanner(),
-              icon: const Icon(Icons.close, size: 18),
-            ),
-          ]),
-        ),
-      ),
-    );
-  }
-}
-
-class _FolderStrip extends StatelessWidget {
-  const _FolderStrip();
-  @override
-  Widget build(BuildContext context) {
-    final store = AppStore.I;
-    final scheme = Theme.of(context).colorScheme;
-    final folders = store.visibleFolders;
-    return SizedBox(
-      height: 48,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        children: [
-          // All audios chip
-          _FilterChipWrap(
-            label: 'All audios',
-            selected: store.selectedFolderId == null,
-            onTap: () => store.selectFolder(null),
-          ),
-          const SizedBox(width: 8),
-          // Playlist chips (no emojis)
-          for (final f in folders)
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: _FilterChipWrap(
-                label: f.name,
-                selected: store.selectedFolderId == f.id,
-                onTap: () {
-                  store.selectFolder(f.id);
-                },
-              ),
-            ),
-          // New playlist chip
-          Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: _FilterChipWrap(
-              label: 'New playlist',
-              selected: false,
-              onTap: () => showFolderCreate(context),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _FilterChipWrap extends StatelessWidget {
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-  const _FilterChipWrap(
-      {required this.label, required this.selected, required this.onTap});
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(20),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 160),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(20),
-          color: selected
-              ? scheme.primary
-              : scheme.surfaceContainerHighest.withOpacity(0.3),
-        ),
-        child: Center(
-          child: Text(
-            label,
-            style: TextStyle(
-              color: selected ? Colors.white : scheme.onSurface,
-              fontWeight: FontWeight.w600,
-              fontSize: 13,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _FoldersList extends StatelessWidget {
   const _FoldersList();
   @override
@@ -750,26 +500,43 @@ class _FoldersList extends StatelessWidget {
         final f = folders[i];
         return KeyedSubtree(
           key: ValueKey(f.id),
-          child: ListTile(
-            leading: Container(
-              width: 32, height: 32,
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.primaryContainer.withOpacity(0.3),
-                borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
+            // The fill lives on a Material, not a decorated Container: ListTile
+            // paints its ink on the nearest Material, and a coloured ancestor
+            // would hide the splash (and trip Flutter's debug warning).
+            child: Material(
+              color: Theme.of(c)
+                  .colorScheme
+                  .surfaceContainerHighest
+                  .withValues(alpha: 0.35),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: BorderSide(
+                      color: Theme.of(c)
+                          .colorScheme
+                          .onSurface
+                          .withValues(alpha: 0.14))),
+              clipBehavior: Clip.antiAlias,
+              child: ListTile(
+                leading: PlaylistArt(
+                  seed: f.id,
+                  size: 40,
+                ),
+                title: Text(f.name),
+                subtitle: Text(
+                    '${store.tracks.where((t) => t.folderIds.contains(f.id)).length} audios'),
+                trailing: ReorderableDragStartListener(
+                    index: i,
+                    child: Icon(Icons.drag_handle, size: 20,
+                        color: Theme.of(c).colorScheme.onSurfaceVariant)),
+                onTap: () {
+                  store.selectFolder(f.id);
+                },
+                onLongPress: () => showFolderMenu(c, f),
               ),
-              child: const Icon(Icons.queue_music, size: 20, color: Colors.white),
             ),
-            title: Text(f.name),
-            subtitle: Text(
-                '${store.tracks.where((t) => t.folderIds.contains(f.id)).length} audios'),
-            trailing: ReorderableDragStartListener(
-                index: i,
-                child: Icon(Icons.drag_handle, size: 20,
-                    color: Theme.of(c).colorScheme.onSurfaceVariant)),
-            onTap: () {
-              store.selectFolder(f.id);
-            },
-            onLongPress: () => showFolderMenu(c, f),
           ),
         );
       },
@@ -780,17 +547,31 @@ class _FoldersList extends StatelessWidget {
 class _NewFolderRow extends StatelessWidget {
   const _NewFolderRow();
   @override
-  Widget build(BuildContext context) => ListTile(
-        leading: Container(
-          width: 32, height: 32,
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.primaryContainer.withOpacity(0.3),
-            borderRadius: BorderRadius.circular(8),
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
+        child: ListTile(
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(
+                  color: Theme.of(context)
+                      .colorScheme
+                      .onSurface
+                      .withValues(alpha: 0.14))),
+          leading: Container(
+            width: 32,
+            height: 32,
+            decoration: BoxDecoration(
+              color: Theme.of(context)
+                  .colorScheme
+                  .primaryContainer
+                  .withValues(alpha: 0.3),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Icon(Icons.add, size: 20, color: Colors.white),
           ),
-          child: const Icon(Icons.add, size: 20, color: Colors.white),
+          title: const Text('New playlist'),
+          onTap: () => showFolderCreate(context),
         ),
-        title: const Text('New playlist'),
-        onTap: () => showFolderCreate(context),
       );
 }
 
@@ -844,9 +625,11 @@ class _FoldersGrid extends StatelessWidget {
       color: selected ? scheme.primaryContainer : null,
       shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(12),
-          side: selected
-              ? BorderSide(color: scheme.primary, width: 1.5)
-              : BorderSide.none),
+          side: BorderSide(
+              color: selected
+                  ? scheme.primary
+                  : scheme.onSurface.withValues(alpha: 0.14),
+              width: selected ? 1.5 : 1)),
       child: InkWell(
         // In rearrange mode taps and menus are inert — dragging is all that's
         // live, so a mis-tap can never select or open a menu mid-drag.
@@ -858,20 +641,28 @@ class _FoldersGrid extends StatelessWidget {
             : () => showFolderMenu(context, f, allowRearrange: true),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
-              width: 48, height: 48,
-              decoration: BoxDecoration(
-                color: scheme.primaryContainer.withOpacity(0.3),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Icon(Icons.queue_music, size: 24, color: Colors.white),
+            PlaylistArt(seed: f.id, size: 44),
+            const SizedBox(height: 4),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              child: Text(f.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 13)),
             ),
-            const SizedBox(height: 6),
-            Text(f.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-            Text(
-                '${store.tracks.where((t) => t.folderIds.contains(f.id)).length} audios',
-                style: Theme.of(context).textTheme.bodySmall),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              child: Text(
+                  '${store.tracks.where((t) => t.folderIds.contains(f.id)).length} audios',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodySmall
+                      ?.copyWith(fontSize: 11)),
+            ),
           ],
         ),
       ),
@@ -882,8 +673,10 @@ class _FoldersGrid extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return Card(
       color: scheme.surfaceContainerHighest.withAlpha(120),
-      shape:
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(
+              color: scheme.onSurface.withValues(alpha: 0.14))),
       child: InkWell(
         onTap: () => showFolderCreate(context),
         child: SizedBox(
@@ -894,10 +687,10 @@ class _FoldersGrid extends StatelessWidget {
               Container(
                 width: 48, height: 48,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF0A5CD6).withOpacity(0.2),
+                  color: kNeonBlue.withValues(alpha: 0.18),
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: const Icon(Icons.add, size: 24, color: Color(0xFF0A5CD6)),
+                child: const Icon(Icons.add, size: 24, color: kNeonBlue),
               ),
               const SizedBox(height: 6),
               const Text('New playlist'),
@@ -933,28 +726,16 @@ Future<void> showSortFilterSheet(BuildContext context) {
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
-                child: Text('Sort and filter',
+                child: Text(
+                    store.selectedFolderId == null
+                        ? 'Sort all audios'
+                        : 'Sort this playlist',
                     style: Theme.of(context)
                         .textTheme
                         .titleLarge
                         ?.copyWith(fontWeight: FontWeight.w600)),
               ),
-              IntrinsicHeight(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(child: _SortHalf(store)),
-                    VerticalDivider(
-                        width: 1,
-                        thickness: 1,
-                        color: Theme.of(context)
-                            .colorScheme
-                            .outlineVariant
-                            .withAlpha(120)),
-                    Expanded(child: _FilterHalf(store)),
-                  ],
-                ),
-              ),
+              _SortHalf(store),
               const SizedBox(height: 10),
               Row(children: [
                 Expanded(
@@ -962,11 +743,10 @@ Future<void> showSortFilterSheet(BuildContext context) {
                     onPressed: () {
                       store.setSortBy(SortBy.dateAdded);
                       store.setSortAsc(false);
-                      store.setDateFilter(DateFilter.any);
                       store.setSearchQuery('');
                       Navigator.pop(sheetCtx);
                     },
-                    child: const Text('Reset filters'),
+                    child: const Text('Reset sort'),
                   ),
                 ),
                 Expanded(
@@ -1001,48 +781,67 @@ class _HalfTitle extends StatelessWidget {
 class _SortHalf extends StatelessWidget {
   final AppStore store;
   const _SortHalf(this.store);
+
   @override
   Widget build(BuildContext context) {
-    final asc = store.sortBy == SortBy.name ? 'A to Z' : 'Oldest first';
-    final desc = store.sortBy == SortBy.name ? 'Z to A' : 'Newest first';
+    // All audios has no manual order: it always runs newest-first and never
+    // offers dragging. Manual shows up only inside a playlist.
+    final inPlaylist = store.selectedFolderId != null;
+    final by = store.activeSortBy;
+    final asc = store.activeSortAsc;
+    final ascLabel = by == SortBy.name ? 'A to Z' : 'Oldest first';
+    final descLabel = by == SortBy.name ? 'Z to A' : 'Newest first';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const _HalfTitle('SORT'),
-        // Manual sort only inside playlists — "All audios" is always date/name.
-        if (store.selectedFolderId != null)
+        if (inPlaylist)
           _ChoiceRow(
               label: 'Manual',
-              hint: 'your own order',
-              selected: store.sortBy == SortBy.manual,
+              hint: 'your saved order',
+              selected: by == SortBy.manual,
               onTap: () => store.setSortBy(SortBy.manual)),
         _ChoiceRow(
             label: 'Name',
-            selected: store.sortBy == SortBy.name,
+            selected: by == SortBy.name,
             onTap: () => store.setSortBy(SortBy.name)),
         _ChoiceRow(
             label: 'Date added',
-            selected: store.sortBy == SortBy.dateAdded,
+            selected: by == SortBy.dateAdded,
             onTap: () => store.setSortBy(SortBy.dateAdded)),
-        if (store.sortBy != SortBy.manual)
+        Padding(
+          padding: const EdgeInsets.only(top: 2, left: 8, right: 8),
+          child: Text(
+            inPlaylist
+                ? 'Dragging works only in Manual. Picking a date or name sort '
+                    'keeps the hand order saved, so Manual brings it back.'
+                : 'All audios always runs newest first and can never be '
+                    'rearranged. Open a playlist for Manual order.',
+            style: TextStyle(
+                fontSize: 11,
+                height: 1.35,
+                color: Theme.of(context).colorScheme.onSurfaceVariant),
+          ),
+        ),
+        if (by != SortBy.manual)
           Padding(
             padding: const EdgeInsets.only(top: 4),
             child: InkWell(
               borderRadius: BorderRadius.circular(8),
-              onTap: () => store.setSortAsc(!store.sortAsc),
+              onTap: () => store.setSortAsc(!asc),
               child: Padding(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                 child: Row(children: [
                   Icon(
-                      store.sortAsc
+                      asc
                           ? Icons.arrow_upward_rounded
                           : Icons.arrow_downward_rounded,
                       size: 14,
                       color: Theme.of(context).colorScheme.primary),
                   const SizedBox(width: 4),
                   Flexible(
-                    child: Text(store.sortAsc ? asc : desc,
+                    child: Text(asc ? ascLabel : descLabel,
                         style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
@@ -1052,25 +851,6 @@ class _SortHalf extends StatelessWidget {
               ),
             ),
           ),
-      ],
-    );
-  }
-}
-
-class _FilterHalf extends StatelessWidget {
-  final AppStore store;
-  const _FilterHalf(this.store);
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const _HalfTitle('DATE ADDED'),
-        for (final f in DateFilter.values)
-          _ChoiceRow(
-              label: f.label,
-              selected: store.dateFilter == f,
-              onTap: () => store.setDateFilter(f)),
       ],
     );
   }
@@ -1196,9 +976,10 @@ class _TracksView extends StatelessWidget {
                 mainAxisExtent: 150,
                 crossAxisSpacing: 8,
                 mainAxisSpacing: 8),
-            // Grid drag fights the UI, so dragging is OFF outside the
-            // explicit rearrange mode (hold a card in grid > Rearrange).
-            dragEnabled: store.arrangingTracks,
+            // Grid dragging only inside a playlist that is showing its Manual
+            // order, and only in the explicit rearrange mode (hold a card >
+            // Rearrange > drag > Save). Outside it, drags fought taps.
+            dragEnabled: store.arrangingTracks && store.canRearrangeTracks,
             dragStartDelay: store.arrangingTracks
                 ? Duration.zero
                 : const Duration(milliseconds: 260),
@@ -1241,21 +1022,23 @@ class _TracksView extends StatelessWidget {
                 track: t,
                 onTap: () => _play(t, c),
                 all: list,
-                handle: ReorderableDragStartListener(
-                    index: i,
-                    child: Icon(Icons.drag_handle, size: 20,
-                        color: Theme.of(c).colorScheme.onSurfaceVariant))));
+                // The handle only appears where dragging is legal: inside a
+                // playlist that is showing its saved Manual order.
+                handle: store.canRearrangeTracks
+                    ? ReorderableDragStartListener(
+                        index: i,
+                        child: Icon(Icons.drag_handle, size: 20,
+                            color: Theme.of(c).colorScheme.onSurfaceVariant))
+                    : null));
       },
     );
   }
 
   void _play(Track t, BuildContext c) {
-    showModalBottomSheet(
-      context: c,
-      showDragHandle: true,
-      useSafeArea: true,
-      builder: (_) => PlayerSheet(
-          track: t, contextTracks: AppStore.I.visibleTracksSorted.toList()),
+    openPlayerPage(
+      c,
+      track: t,
+      contextTracks: AppStore.I.visibleTracksSorted.toList(),
     );
   }
 }
@@ -1269,24 +1052,35 @@ class _TrackCard extends StatelessWidget {
       {required this.track, required this.onTap, this.rearrangeMode = false});
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     return Card(
       child: InkWell(
         onTap: onTap,
         onLongPress: rearrangeMode
             ? null
-            : () => showTrackMenu(context, track, allowRearrange: true),
+            : () => showTrackMenu(context, track,
+                allowRearrange: AppStore.I.canRearrangeTracks),
         child: Padding(
-          padding: const EdgeInsets.all(10),
+          padding: const EdgeInsets.all(8),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.start,
             children: [
-              Icon(Icons.music_note_outlined, color: scheme.onSurfaceVariant),
-              const Spacer(),
-              Text(track.title,
-                  maxLines: 2, overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontWeight: FontWeight.w600)),
-              Text(track.source, style: Theme.of(context).textTheme.bodySmall),
+              CoverArt(seed: track.id, size: 40),
+              const SizedBox(height: 6),
+              Flexible(
+                child: Text(track.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w600)),
+              ),
+              Text(track.source,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodySmall
+                      ?.copyWith(fontSize: 11)),
             ],
           ),
         ),
@@ -1300,8 +1094,7 @@ class _EmptyLibrary extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final store = AppStore.I;
-    final filtered = store.searchQuery.trim().isNotEmpty ||
-        store.dateFilter != DateFilter.any;
+    final filtered = store.searchQuery.trim().isNotEmpty;
     return SliverToBoxAdapter(
       child: Padding(
         padding: const EdgeInsets.all(40),
@@ -1331,10 +1124,6 @@ class _EmptyLibrary extends StatelessWidget {
 class _ImportFab extends StatelessWidget {
   static const double _collapsed = 56;
 
-  /// Exposed so the FAB slot can reserve this width, which keeps the buttons
-  /// below from shifting while the pill animates. The pill itself never grows
-  /// past its content, so no empty icon-width space trails the label.
-  static const double expandedWidth = 184;
   final bool expanded;
   final VoidCallback onPressed;
   const _ImportFab({required this.expanded, required this.onPressed});
@@ -1515,14 +1304,9 @@ class TrackTile extends StatelessWidget {
       subtitle: Text(
           '${track.source} · ${track.durationMs > 0 ? mmss(track.durationMs) : '—'}',
           style: Theme.of(context).textTheme.bodySmall),
-      leading: Container(
-        width: 44,
-        height: 44,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(8),
-          color: scheme.surfaceContainerHighest,
-        ),
-        child: Icon(Icons.music_note_outlined, color: scheme.onSurfaceVariant),
+      leading: CoverArt(
+        seed: track.id,
+        size: 44,
       ),
       trailing: handle == null && !isCurrent
           ? indicator
@@ -1743,6 +1527,108 @@ Future<void> deleteTrackWithConfirm(BuildContext context, Track t) async {
   await RtPlayer.I.removeIfCurrent(t.id);
 }
 
+/// Rewarded video → coins. Shared by the Library FAB and the Home action row.
+/// Returns true when the user actually earned coins.
+Future<bool> watchRewardedAd(BuildContext context) async {
+  final outcome = await Ads.I.showRewarded();
+  if (!context.mounted) return false;
+  switch (outcome) {
+    case RewardedOutcome.earned:
+      await CoinWallet.I.addFromAd();
+      if (context.mounted) {
+        showTopToast(
+            context,
+            '+${CoinWallet.coinsPerAd} coin'
+            '${CoinWallet.coinsPerAd == 1 ? '' : 's'}');
+      }
+      return true;
+    case RewardedOutcome.dismissedEarly:
+      // The video played but was closed before the reward: say so instead of
+      // claiming no ad existed.
+      showTopToast(context, 'Watch the whole video to earn the coin.',
+          error: true);
+      return false;
+    case RewardedOutcome.unavailable:
+      showTopToast(context, 'No ad available right now — try again.',
+          error: true);
+      return false;
+  }
+}
+
+/// Import intake: pick files (audio AND video) or a whole folder of videos.
+/// Videos play their audio track directly — the file is never touched: not
+/// copied, not deleted, zero storage waste.
+///
+/// Top-level so Home and Library share one flow (same paywall check, same
+/// one-ad-per-import gate).
+Future<void> openImportSheet(BuildContext context) async {
+  if (Entitlements.I.importBlockReason(AppStore.I.tracks.length) != null) {
+    showPaywallSheet(context,
+        reason: 'Free tier holds ${Entitlements.I.maxTracks} audios');
+    return;
+  }
+  final choice = await showModalBottomSheet<String>(
+    context: context,
+    showDragHandle: true,
+    useSafeArea: true,
+    builder: (c) => SafeArea(
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        ListTile(
+          leading: const Icon(Icons.audiotrack_outlined),
+          title: const Text('Import files'),
+          subtitle: const Text(
+              'Pick one file or many. Songs and videos both work - videos '
+              'play as audio.',
+              style: TextStyle(fontSize: 12)),
+          onTap: () => Navigator.pop(c, 'files'),
+        ),
+        ListTile(
+          leading: const Icon(Icons.video_library_outlined),
+          title: const Text('Import a folder'),
+          subtitle: const Text(
+              'Every audio and video in the folder. The newest 25 are added '
+              'on the free plan.',
+              style: TextStyle(fontSize: 12)),
+          onTap: () => Navigator.pop(c, 'folder'),
+        ),
+        const SizedBox(height: 6),
+      ]),
+    ),
+  );
+  if (choice == null || !context.mounted) return;
+
+  // Free tier: one download/import ad per audio. Replaces the loading /
+  // importing moment — the ad runs first, the import starts after.
+  if (Entitlements.I.showAds) {
+    final earned = await Ads.I.showDownloadAd();
+    if (!context.mounted) return;
+    if (!earned) {
+      showTopToast(
+          context, 'Ad didn\'t load — proceeding with the import anyway.');
+    }
+  }
+
+  try {
+    final n = switch (choice) {
+      'files' => await importMediaFiles(context),
+      _ => await importMediaFolder(context),
+    };
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(n == 0
+          ? 'No audio or video files found there'
+          : 'Imported $n ${n == 1 ? 'audio' : 'audios'}'),
+      behavior: SnackBarBehavior.floating,
+    ));
+  } catch (e) {
+    // Say WHY it failed (denied access, unreadable folder…) rather than
+    // claiming nothing was found, which was a lie about the folder.
+    debugPrint('import failed: $e');
+    if (!context.mounted) return;
+    showTopToast(context, "Couldn't open that folder. Try again.");
+  }
+}
+
 enum _MenuAction { rearrange, rename, move, remove, delete }
 
 class MiniBar extends StatelessWidget {
@@ -1781,16 +1667,12 @@ class MiniBar extends StatelessWidget {
             return;
           }
           final loaded = RtPlayer.I.current != null;
-          showModalBottomSheet(
-            context: context,
-            showDragHandle: true,
-            useSafeArea: true,
-            builder: (_) => PlayerSheet(
-              track: t,
-              contextTracks:
-                  loaded ? const [] : AppStore.I.visibleTracksSorted.toList(),
-              startPlayback: !loaded,
-            ),
+          openPlayerPage(
+            context,
+            track: t,
+            contextTracks:
+                loaded ? const [] : AppStore.I.visibleTracksSorted.toList(),
+            startPlayback: !loaded,
           );
         }
 
@@ -1816,17 +1698,21 @@ class MiniBar extends StatelessWidget {
                 ListTile(
                   dense: true,
                   onTap: idle ? null : openPlayer,
-                  leading: Container(
-                    width: 38,
-                    height: 38,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(8),
-                      color: scheme.surfaceContainerHighest,
-                    ),
-                    child: Icon(
-                        idle ? Icons.music_off_outlined : Icons.music_note,
-                        color: scheme.onSurfaceVariant),
-                  ),
+                  leading: idle
+                      ? Container(
+                          width: 38,
+                          height: 38,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(8),
+                            color: scheme.surfaceContainerHighest,
+                          ),
+                          child: Icon(Icons.music_off_outlined,
+                              color: scheme.onSurfaceVariant),
+                        )
+                      : CoverArt(
+                          seed: t.id,
+                          size: 38,
+                        ),
                   title: Text(idle ? 'Nothing playing' : t.title,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(

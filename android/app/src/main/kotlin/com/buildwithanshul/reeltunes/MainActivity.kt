@@ -8,14 +8,10 @@ import android.net.Uri
 import android.os.Bundle
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
-import com.ryanheise.audioservice.AudioServiceActivity
+import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
-// AudioServiceActivity is REQUIRED by just_audio_background: it wires the
-// Flutter engine to the media session service. Without it, init() fails on
-// the platform side and every play() throws LateInitializationError.
-//
 // Two Android concerns live here rather than in plugins:
 //  1. picking media files / a media folder over the Storage Access Framework.
 //     Scoped storage denies raw File access to DCIM, Movies and Download
@@ -23,12 +19,15 @@ import io.flutter.plugin.common.MethodChannel
 //     READ_MEDIA_* permissions do NOT re-enable directory listing — SAF does,
 //     with no storage permission at all. Only content:// URIs are handed back,
 //     so nothing is copied or moved.
-//  2. clearing the media notification when ReelTunes is swiped out of recents.
-class MainActivity : AudioServiceActivity() {
+//  2. exposing the media session (PlaybackService) to Dart and clearing its
+//     notification when ReelTunes is swiped out of recents.
+class MainActivity : FlutterActivity() {
     private var leavingWithBack = false
     private var pendingMedia: MethodChannel.Result? = null
     private var engine: EngineBridge? = null
     private var folder: FolderBridge? = null
+    @Suppress("unused")
+    private var consent: ConsentBridge? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -52,6 +51,29 @@ class MainActivity : AudioServiceActivity() {
         // The audios folder as a SAF tree (saves land there, file-manager drops
         // are picked up by scan, playlists are mirrored inside it).
         folder = FolderBridge(this, flutterEngine.dartExecutor.binaryMessenger)
+        // Privacy Policy / Terms acceptance, kept in
+        // Download/ReelTunes/consent.json so it outlives an uninstall.
+        consent = ConsentBridge(this, flutterEngine.dartExecutor.binaryMessenger)
+        // Media session: Dart owns playback, this side owns the MediaSessionCompat
+        // and the MediaStyle notification that Android shows in the shade and on
+        // the lock screen.
+        PlaybackLink.attach(flutterEngine.dartExecutor.binaryMessenger)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, PlaybackLink.CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "init" -> result.success(true)
+                    "update" -> {
+                        val args = call.arguments as? Map<*, *>
+                        PlaybackService.push(this, playbackState(args))
+                        result.success(true)
+                    }
+                    "clear" -> {
+                        PlaybackService.clear(this)
+                        result.success(true)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, MEDIA_CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -95,6 +117,22 @@ class MainActivity : AudioServiceActivity() {
                         result.success(ReminderScheduler.canScheduleExact(this))
                     "openExactAlarmSettings" -> {
                         ReminderScheduler.requestExactPermission(this)
+                        result.success(true)
+                    }
+                    "openNotificationSettings" -> {
+                        try {
+                            startActivity(
+                                Intent(android.provider.Settings
+                                    .ACTION_APP_NOTIFICATION_SETTINGS)
+                                    .putExtra(
+                                        android.provider.Settings
+                                            .EXTRA_APP_PACKAGE,
+                                        packageName
+                                    )
+                            )
+                        } catch (_: Exception) {
+                            // Some OEM builds ship without this screen.
+                        }
                         result.success(true)
                     }
                     "test" -> {
@@ -207,6 +245,20 @@ class MainActivity : AudioServiceActivity() {
                 }
             }
         }.start()
+    }
+
+    private fun playbackState(args: Map<*, *>?): Bundle {
+        val out = Bundle()
+        out.putString("title", args?.get("title") as? String ?: "")
+        out.putString("artist", args?.get("artist") as? String ?: "")
+        out.putString("album", args?.get("album") as? String ?: "")
+        out.putInt("cover", (args?.get("cover") as? Number)?.toInt() ?: 0)
+        out.putBoolean("playing", args?.get("playing") == true)
+        out.putLong("position", (args?.get("position") as? Number)?.toLong() ?: 0L)
+        out.putLong("duration", (args?.get("duration") as? Number)?.toLong() ?: 0L)
+        out.putBoolean("hasNext", args?.get("hasNext") != false)
+        out.putBoolean("hasPrevious", args?.get("hasPrevious") != false)
+        return out
     }
 
     private fun takeReadGrant(uri: Uri) {
@@ -361,27 +413,10 @@ class MainActivity : AudioServiceActivity() {
             val prefs: SharedPreferences = getSharedPreferences("${packageName}_preferences", Context.MODE_PRIVATE)
             val survive = prefs.getBoolean("surviveRecentsSwipe", false)
             if (!survive) {
-                clearMediaNotification()
+                PlaybackService.clear(this)
             }
         }
         super.onDestroy()
-    }
-
-    // Recents-swipe cleanup reuses audio_service's "notification deleted"
-    // signal: it stops playback and takes the media notification/widget away.
-    // The receiver is addressed by class NAME because its supertype lives in
-    // a legacy androidx.media artifact that is not on this module's classpath.
-    private fun clearMediaNotification() {
-        try {
-            sendBroadcast(
-                Intent(ACTION_NOTIFICATION_DELETE).setClassName(
-                    this,
-                    AUDIO_SERVICE_MEDIA_BUTTON_RECEIVER
-                )
-            )
-        } catch (_: Throwable) {
-            // Nothing to clean up if the service already went away.
-        }
     }
 }
 
@@ -395,7 +430,3 @@ private const val REMINDER_CHANNEL = "com.buildwithanshul.reeltunes/reminders"
 private const val REQUEST_FILES = 4312
 private const val REQUEST_FOLDER = 4313
 private const val REQUEST_NOTIFICATIONS = 4315
-private const val AUDIO_SERVICE_MEDIA_BUTTON_RECEIVER =
-    "com.ryanheise.audioservice.MediaButtonReceiver"
-private const val ACTION_NOTIFICATION_DELETE =
-    "com.ryanheise.audioservice.intent.action.ACTION_NOTIFICATION_DELETE"

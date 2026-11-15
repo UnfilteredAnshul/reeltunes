@@ -1,7 +1,6 @@
 // Settings: appearance (system/light/dark), storage location,
 // account/premium entry. Full pro unlocked while we build; gating later.
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -14,6 +13,7 @@ import 'entitlements.dart';
 import 'legal.dart';
 import 'library_sync.dart';
 import 'models.dart';
+import 'player.dart';
 import 'receipt_pdf.dart';
 import 'redeem_sheet.dart';
 import 'shop_sheet.dart';
@@ -31,7 +31,13 @@ class SettingsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+      // Transparent: the mesh art from RootScreen shows through this tab.
+      backgroundColor: Colors.transparent,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        title: const Text('Settings'),
+      ),
       body: ListenableBuilder(
         listenable: AppStore.I,
         builder: (context, _) {
@@ -125,6 +131,15 @@ class SettingsScreen extends StatelessWidget {
                     'on your phone). Covers the track menu and playlist edits.'),
                 value: store.confirmRemove,
                 onChanged: (v) => store.setConfirmRemove(v),
+              ),
+              SwitchListTile(
+                title: const Text('Confirm before deleting a playlist'),
+                subtitle: const Text(
+                    'Ask before a playlist is deleted. Turning it off is the '
+                    'same as ticking "do not show this again" — your audios '
+                    'always stay in the library.'),
+                value: store.confirmPlaylistDelete,
+                onChanged: (v) => store.setConfirmPlaylistDelete(v),
               ),
               SwitchListTile(
                 title: const Text('Keep playing during calls'),
@@ -405,35 +420,56 @@ class SettingsScreen extends StatelessWidget {
   }
 }
 
-String? _importAudioPickFolderValue;
-Future<String?> importAudioPickFolder() async {
-  final p = await FilePicker.getDirectoryPath(
-    dialogTitle: 'Choose where audios are saved',
-  );
-  return p ?? _importAudioPickFolderValue;
-}
-
-/// Opens Google's UMP consent / privacy options form. Always present in debug
-/// so the flow is testable; in release AdMob tells us whether the row is
-/// required (EEA/UK/CH users) and we render it when it is.
+/// Opens Google's UMP consent / privacy options form. Always listed for builds
+/// that can show ads: Google requires a reachable privacy entry point, and a
+/// hidden row when AdMob says "not required" is exactly what made the button
+/// feel dead. If Google has no form for this copy, the tap offers Google's own
+/// ad settings instead of doing nothing.
 class _AdPrivacyTile extends StatelessWidget {
   const _AdPrivacyTile();
 
+  static const _googleAdSettings = 'https://adssettings.google.com/';
+
+  Future<void> _open(BuildContext context) async {
+    final problem = await Ads.I.showPrivacyOptions();
+    if (!context.mounted || problem == null) return;
+    debugPrint('UMP privacy form: $problem');
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        title: const Text('Ad privacy choices'),
+        content: const Text(
+          'Google AdMob serves the ads in ReelTunes, and it has no privacy '
+          'form available for this copy right now. You can still change how '
+          'Google uses your data for ads in your Google account.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx, false),
+            child: const Text('Close'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogCtx, true),
+            child: const Text('Open Google Ad settings'),
+          ),
+        ],
+      ),
+    );
+    if (go == true) {
+      await launchUrl(Uri.parse(_googleAdSettings),
+          mode: LaunchMode.externalApplication);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<bool>(
-      future: Ads.I.privacyOptionsRequired(),
-      builder: (context, snap) {
-        final required = snap.data ?? false;
-        if (!kDebugMode && !required) return const SizedBox.shrink();
-        return ListTile(
-          leading: const Icon(Icons.privacy_tip_outlined),
-          title: const Text('Ad privacy choices'),
-          subtitle: const Text(
-              'Change how ads may use your data · Google AdMob'),
-          onTap: () => Ads.I.showPrivacyOptions(),
-        );
-      },
+    return ListTile(
+      leading: const Icon(Icons.privacy_tip_outlined),
+      title: const Text('Ad privacy choices'),
+      subtitle:
+          const Text('Change how ads may use your data · Google AdMob'),
+      trailing: const Icon(Icons.open_in_new, size: 18),
+      onTap: () => _open(context),
     );
   }
 }
@@ -555,6 +591,36 @@ class _NotificationSettingsTileState extends State<_NotificationSettingsTile> {
             // Ringtone picker may not be available on all devices — silently skip.
           }
         },
+      ),
+      // The playback notification is the one thing a denied permission hides
+      // without breaking playback. Android stops showing the in-app prompt after
+      // two denials, so this row goes straight to the app's system settings.
+      ListenableBuilder(
+        listenable: RtPlayer.I,
+        builder: (context, _) {
+          if (!RtPlayer.I.mediaSessionFailed) return const SizedBox.shrink();
+          return ListTile(
+            leading: const Icon(Icons.music_off_outlined),
+            title: const Text('Lock screen player is blocked'),
+            subtitle: const Text(
+                'This phone refused the media notification. Allow '
+                'notifications for ReelTunes in Android settings, then play '
+                'something again.'),
+            trailing: TextButton(
+              onPressed: () =>
+                  NotificationService.I.openSystemNotificationSettings(),
+              child: const Text('Allow'),
+            ),
+          );
+        },
+      ),
+      ListTile(
+        leading: const Icon(Icons.notifications_outlined),
+        title: const Text('Android notification settings'),
+        subtitle:
+            const Text('Where to allow playback and reminder notifications.'),
+        trailing: const Icon(Icons.open_in_new, size: 18),
+        onTap: () => NotificationService.I.openSystemNotificationSettings(),
       ),
     ]);
   }

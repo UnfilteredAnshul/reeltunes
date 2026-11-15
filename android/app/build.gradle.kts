@@ -95,4 +95,7 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
+    // MediaSessionCompat + MediaStyle notification for the lock-screen/shade
+    // player, owned by PlaybackService.kt. No audio_service involved.
+    implementation("androidx.media:media:1.7.0")
 }

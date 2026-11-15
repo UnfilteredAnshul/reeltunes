@@ -1,6 +1,4 @@
-// Shared bottom sheets: Add reel + player. Emoji picker is its own file.
-
-import 'dart:math';
+// Shared bottom sheets: Add reel, player page, playlists, guide.
 
 import 'dart:async';
 
@@ -9,7 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'billing.dart';
-import 'emoji.dart';
+import 'cover_art.dart';
 import 'entitlements.dart';
 import 'extraction_errors.dart';
 import 'extractor.dart';
@@ -147,7 +145,7 @@ class _AddReelSheetState extends State<AddReelSheet> {
                 onChanged: (v) => setState(() => v == true
                     ? pickedFolders.add(f.id)
                     : pickedFolders.remove(f.id)),
-                title: Text('${f.emoji} ${f.name}'),
+                title: Text(f.name),
               ),
             ListTile(
               dense: true,
@@ -425,10 +423,6 @@ class FolderCreateSheet extends StatefulWidget {
 
 class _FolderCreateSheetState extends State<FolderCreateSheet> {
   final name = TextEditingController();
-  /// Random default: when the user doesn't pick an emoji the app drops one
-  /// on them — the "every folder has an emoji" rule is satisfied from the
-  /// moment the sheet opens (they can still tap a different one).
-  String emoji = emojiPalette[Random().nextInt(emojiPalette.length)];
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -452,24 +446,6 @@ class _FolderCreateSheetState extends State<FolderCreateSheet> {
                 hintText: 'e.g. Motivation, Edits…', border: OutlineInputBorder()),
           ),
           const SizedBox(height: 16),
-          SizedBox(
-            height: 44,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              children: emojiPalette
-                  .map((e) => Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 3),
-                        child: InkWell(
-                          onTap: () => setState(() => emoji = e),
-                          child: Text(e,
-                              style:
-                                  TextStyle(fontSize: emoji == e ? 26 : 20)),
-                        ),
-                      ))
-                  .toList(),
-            ),
-          ),
-          const SizedBox(height: 16),
           FilledButton.icon(
             onPressed: _create,
             icon: const Icon(Icons.create_new_folder_outlined),
@@ -483,7 +459,7 @@ class _FolderCreateSheetState extends State<FolderCreateSheet> {
   void _create() {
     final n = name.text.trim();
     if (n.isEmpty) return;
-    AppStore.I.addFolder(n, emoji);
+    AppStore.I.addFolder(n, '');
     Navigator.pop(context);
   }
 
@@ -653,9 +629,9 @@ Future<bool?> _confirmPlaylistRemoval(BuildContext context, int count) {
 // Folder menu + emoji editor
 // ---------------------------------------------------------------------------
 
-enum _FolderMenuAction { rearrange, shuffle, rename, editEmoji, delete }
+enum _FolderMenuAction { rearrange, shuffle, rename, delete }
 
-/// Long-press menu on a category: shuffle / rename / edit emoji / delete.
+/// Long-press menu on a playlist: shuffle / rename / delete.
 /// [allowRearrange] is grid-only — grid drags are gated behind that explicit
 /// mode so dragging and tapping stop fighting each other.
 Future<void> showFolderMenu(BuildContext context, Folder f,
@@ -674,24 +650,19 @@ Future<void> showFolderMenu(BuildContext context, Folder f,
             onTap: () => Navigator.pop(sheetCtx, _FolderMenuAction.rearrange),
           ),
         ListTile(
-          leading: const Icon(Icons.shuffle_outlined),
-          title: const Text('Shuffle'),
+          leading: const Icon(Icons.shuffle_rounded),
+          title: const Text('Shuffle playlist'),
           onTap: () => Navigator.pop(sheetCtx, _FolderMenuAction.shuffle),
         ),
         ListTile(
           leading: const Icon(Icons.edit_outlined),
-          title: const Text('Rename'),
+          title: const Text('Rename playlist'),
           onTap: () => Navigator.pop(sheetCtx, _FolderMenuAction.rename),
-        ),
-        ListTile(
-          leading: const Icon(Icons.emoji_emotions_outlined),
-          title: const Text('Edit emoji'),
-          onTap: () => Navigator.pop(sheetCtx, _FolderMenuAction.editEmoji),
         ),
         ListTile(
           leading: Icon(Icons.delete_outline,
               color: Theme.of(sheetCtx).colorScheme.error),
-          title: Text('Delete',
+          title: Text('Delete playlist',
               style: TextStyle(
                   color: Theme.of(sheetCtx).colorScheme.error,
                   fontWeight: FontWeight.w600)),
@@ -719,15 +690,11 @@ Future<void> showFolderMenu(BuildContext context, Folder f,
             context: list, playingFrom: f.name);
         if (!context.mounted) return;
         // Bring the player up so the user sees what's playing.
-        await showModalBottomSheet(
-          context: context,
-          showDragHandle: true,
-          useSafeArea: true,
-          builder: (_) => PlayerSheet(
-            track: list.first,
-            contextTracks: const [], // queue already built; sheet renders only
-            startPlayback: false,
-          ),
+        openPlayerPage(
+          context,
+          track: list.first,
+          contextTracks: const [], // queue already built; player renders only
+          startPlayback: false,
         );
       }
     case _FolderMenuAction.rename:
@@ -740,45 +707,86 @@ Future<void> showFolderMenu(BuildContext context, Folder f,
         confirmLabel: 'Rename',
       );
       if (name != null && name.isNotEmpty) store.renameFolder(f.id, name);
-    case _FolderMenuAction.editEmoji:
-      if (!context.mounted) return;
-      final emoji = await showEmojiPickerSheet(context);
-      if (emoji != null) store.setFolderEmoji(f.id, emoji);
     case _FolderMenuAction.delete:
-      final ok = await showModalBottomSheet<bool>(
-        context: context,
-        showDragHandle: true,
-        builder: (sheetCtx) => Padding(
-          padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
-          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment:
-              CrossAxisAlignment.stretch, children: [
-            Text('Delete "${f.name}"?',
-                style: const TextStyle(fontWeight: FontWeight.w600,
-                    fontSize: 18)),
-            const SizedBox(height: 8),
-            Text('Your audios stay in the library. Only the playlist goes '
-                'away.',
-                style: Theme.of(sheetCtx).textTheme.bodySmall),
-            const SizedBox(height: 16),
-            Row(children: [
-              TextButton(
-                  onPressed: () => Navigator.pop(sheetCtx, false),
-                  child: const Text('Cancel')),
-              const Spacer(),
-              FilledButton.icon(
-                style: FilledButton.styleFrom(
-                    backgroundColor: Theme.of(sheetCtx).colorScheme.error,
-                    foregroundColor: Theme.of(sheetCtx).colorScheme.onError),
-                icon: const Icon(Icons.delete_outline),
-                label: const Text('Delete playlist'),
-                onPressed: () => Navigator.pop(sheetCtx, true),
-              ),
-            ]),
-          ]),
-        ),
-      );
-      if (ok == true) store.deleteFolder(f.id);
+      await confirmDeleteFolder(context, f);
   }
+}
+
+/// Delete confirmation with a "do not show again" checkbox.
+///
+/// The checkbox writes straight to [AppStore.confirmPlaylistDelete], so the
+/// skip can be undone from Settings → confirm before deleting a playlist.
+/// Returns true when the playlist was deleted.
+Future<bool> confirmDeleteFolder(BuildContext context, Folder f) async {
+  final store = AppStore.I;
+  if (!store.confirmPlaylistDelete) {
+    store.deleteFolder(f.id);
+    return true;
+  }
+  var skipNext = false;
+  final ok = await showModalBottomSheet<bool>(
+    context: context,
+    showDragHandle: true,
+    builder: (sheetCtx) => StatefulBuilder(
+      builder: (sheetCtx, setSheetState) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+          child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('Delete "${f.name}"?',
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w600, fontSize: 18)),
+                const SizedBox(height: 8),
+                Text('Your audios stay in the library. Only the playlist goes '
+                    'away.',
+                    style: Theme.of(sheetCtx).textTheme.bodySmall),
+                const SizedBox(height: 8),
+                InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: () => setSheetState(() => skipNext = !skipNext),
+                  child: Row(children: [
+                    Checkbox(
+                      value: skipNext,
+                      onChanged: (v) =>
+                          setSheetState(() => skipNext = v ?? false),
+                    ),
+                    const Expanded(
+                      child: Padding(
+                        padding: EdgeInsets.only(left: 4),
+                        child: Text('Do not show this again',
+                            style: TextStyle(fontSize: 13)),
+                      ),
+                    ),
+                  ]),
+                ),
+                const SizedBox(height: 8),
+                Row(children: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(sheetCtx, false),
+                      child: const Text('Cancel')),
+                  const Spacer(),
+                  FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                        backgroundColor:
+                            Theme.of(sheetCtx).colorScheme.error,
+                        foregroundColor:
+                            Theme.of(sheetCtx).colorScheme.onError),
+                    icon: const Icon(Icons.delete_outline),
+                    label: const Text('Delete playlist'),
+                    onPressed: () => Navigator.pop(sheetCtx, true),
+                  ),
+                ]),
+              ]),
+        ),
+      ),
+    ),
+  );
+  if (ok != true) return false;
+  if (skipNext) store.setConfirmPlaylistDelete(false);
+  store.deleteFolder(f.id);
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -825,8 +833,8 @@ const List<_GuideEntry> _guideSteps = [
   _GuideEntry(
     Icons.playlist_add_rounded,
     'Make a playlist',
-    'Tap New playlist and give it a name. Tap its chip at the top to see only '
-        'those songs. Tap All to see everything again.',
+    'Tap New playlist and give it a name. Open it from the Playlists section to '
+        'see only those songs. Tap All to see everything again.',
     ['playlist', 'folder', 'organise', 'organize'],
   ),
   _GuideEntry(
@@ -838,9 +846,26 @@ const List<_GuideEntry> _guideSteps = [
   _GuideEntry(
     Icons.tune_rounded,
     'Sort and filter',
-    'Tap the sliders button. Sort on the left, date filter on the right. You '
-        'can use one or both. The newest audio is always first after an import.',
-    ['sort', 'filter', 'newest', 'date'],
+    'Tap the sliders button. Sort on the left, date filter on the right. All '
+        'audios is always newest first and cannot be dragged. Open a playlist '
+        'to sort it by name or date: each playlist remembers its own choice.',
+    ['sort', 'filter', 'newest', 'date', 'order'],
+  ),
+  _GuideEntry(
+    Icons.drag_indicator_rounded,
+    'Manual order inside playlists',
+    'Open a playlist, tap the sliders and pick Manual, then drag songs. That '
+        'hand order is saved per playlist. Choosing name or date turns '
+        'dragging off but keeps the saved order, so Manual restores it later.',
+    ['manual', 'drag', 'rearrange', 'order', 'playlist', 'sort'],
+  ),
+  _GuideEntry(
+    Icons.workspace_premium_outlined,
+    'Free plan limit',
+    'Free shows your 25 newest audios. Delete one and the next newest takes '
+        'its place straight away, so you always keep 25. The extra files stay '
+        'on your phone and appear again when you go Pro.',
+    ['free', 'limit', '25', 'cap', 'pro', 'delete', 'hidden'],
   ),
   _GuideEntry(
     Icons.play_circle_outline_rounded,
@@ -865,6 +890,12 @@ const List<_GuideEntry> _guideSteps = [
 List<_GuideEntry> get _guideDownloadErrors => [
       for (final e in downloadErrorHelp)
         _GuideEntry(Icons.error_outline_rounded, e.title, e.body, e.keywords),
+    ];
+
+/// Non-download problems: playback, notifications, ads, playlists, purchases.
+List<_GuideEntry> get _guideAppErrors => [
+      for (final e in appErrorHelp)
+        _GuideEntry(Icons.help_outline_rounded, e.title, e.body, e.keywords),
     ];
 
 class _GuideSheet extends StatefulWidget {
@@ -897,6 +928,7 @@ class _GuideSheetState extends State<_GuideSheet> {
     final q = _search.text.trim().toLowerCase();
     final steps = _guideSteps.where((e) => _matches(e, q)).toList();
     final errors = _guideDownloadErrors.where((e) => _matches(e, q)).toList();
+    final appErrors = _guideAppErrors.where((e) => _matches(e, q)).toList();
     return ConstrainedBox(
       constraints:
           BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.86),
@@ -968,7 +1000,21 @@ class _GuideSheetState extends State<_GuideSheet> {
                     for (final e in errors)
                       _GuideStep(e.icon, e.title, e.body),
                   ],
-                  if (steps.isEmpty && errors.isEmpty)
+                  if (appErrors.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      q.isEmpty ? 'Other problems' : 'Problems',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: scheme.primary,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    for (final e in appErrors)
+                      _GuideStep(e.icon, e.title, e.body),
+                  ],
+                  if (steps.isEmpty && errors.isEmpty && appErrors.isEmpty)
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 24),
                       child: Text(
@@ -1036,48 +1082,6 @@ class _GuideStep extends StatelessWidget {
   }
 }
 
-/// Emoji picker sheet for folder icons.
-Future<String?> showEmojiPickerSheet(BuildContext context) {
-  return showModalBottomSheet<String>(
-    context: context,
-    showDragHandle: true,
-    builder: (sheetCtx) => Padding(
-      padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
-      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment:
-          CrossAxisAlignment.start, children: [
-        Text('Pick an emoji',
-            style: Theme.of(sheetCtx)
-                .textTheme
-                .titleLarge
-                ?.copyWith(fontWeight: FontWeight.w600)),
-        const SizedBox(height: 16),
-        Wrap(
-          spacing: 6,
-          runSpacing: 6,
-          children: [
-            for (final e in emojiPalette)
-              InkWell(
-                onTap: () => Navigator.pop(sheetCtx, e),
-                borderRadius: BorderRadius.circular(10),
-                child: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(10),
-                    color: Theme.of(sheetCtx)
-                        .colorScheme
-                        .surfaceContainerHighest
-                        .withAlpha(120),
-                  ),
-                  child: Text(e, style: const TextStyle(fontSize: 24)),
-                ),
-              ),
-          ],
-        ),
-      ]),
-    ),
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Player sheet
 // ---------------------------------------------------------------------------
@@ -1100,7 +1104,7 @@ class PlayerSheet extends StatefulWidget {
 
 class _PlayerSheetState extends State<PlayerSheet> {
   /// Same long-press menu as the library list, from the player's 3-dot button.
-  /// If the action removes or deletes the track, the sheet has nothing left to
+  /// If the action removes or deletes the track, the screen has nothing left to
   /// show, so it closes.
   Future<void> _openTrackMenu(Track t) async {
     await showTrackMenu(context, t);
@@ -1125,13 +1129,18 @@ class _PlayerSheetState extends State<PlayerSheet> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final mq = MediaQuery.sizeOf(context);
+    // Artwork is the flex item: it takes most of the width but never more than
+    // ~38% of the height, so short screens (and landscape) cannot overflow.
+    final art = (mq.width * 0.66).clamp(120.0, mq.height * 0.38);
     return ListenableBuilder(
       listenable: Listenable.merge([RtPlayer.I, AppStore.I]),
       builder: (context, _) {
         final player = RtPlayer.I;
         final t = player.current ?? widget.track;
-        return Container(
-          padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+        return SingleChildScrollView(
+          padding: EdgeInsets.fromLTRB(
+              mq.width * 0.06, mq.height * 0.01, mq.width * 0.06, mq.height * 0.03),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -1153,7 +1162,13 @@ class _PlayerSheetState extends State<PlayerSheet> {
                   onPressed: () => _openTrackMenu(t),
                 ),
               ]),
-              const SizedBox(height: 4),
+              SizedBox(height: mq.height * 0.008),
+              CoverArt(
+                seed: t.id,
+                size: art,
+                glow: true,
+              ),
+              SizedBox(height: mq.height * 0.02),
               Text(t.title,
                   textAlign: TextAlign.center,
                   style: Theme.of(context)
@@ -1379,6 +1394,42 @@ class _PlayerSheetState extends State<PlayerSheet> {
 }
 
 // ---------------------------------------------------------------------------
+// Player page
+// ---------------------------------------------------------------------------
+
+/// Opens the full player as a page, not a bottom sheet.
+///
+/// The sheet kept overflowing once the artwork was added: a sheet's max height
+/// is ~85% of the screen and the content is not scrollable by default. As a
+/// page it gets the whole viewport and [PlayerSheet] scrolls its body.
+Future<void> openPlayerPage(
+  BuildContext context, {
+  required Track track,
+  required List<Track> contextTracks,
+  bool startPlayback = true,
+}) {
+  return Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      fullscreenDialog: true,
+      builder: (_) => Scaffold(
+        backgroundColor: Theme.of(context).colorScheme.surface,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          surfaceTintColor: Colors.transparent,
+          elevation: 0,
+          title: const Text('Now playing'),
+        ),
+        body: PlayerSheet(
+          track: track,
+          contextTracks: contextTracks,
+          startPlayback: startPlayback,
+        ),
+      ),
+    ),
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Advanced-looping widgets
 // ---------------------------------------------------------------------------
 
@@ -1387,7 +1438,7 @@ class _LoopChip extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
   const _LoopChip(
-      {super.key, required this.label, required this.selected, required this.onTap});
+      {required this.label, required this.selected, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -1407,7 +1458,7 @@ class _LoopChip extends StatelessWidget {
 class _RangeStepper extends StatelessWidget {
   final String label;
   final TextEditingController controller;
-  const _RangeStepper({super.key, required this.label, required this.controller});
+  const _RangeStepper({required this.label, required this.controller});
 
   void _bump(int delta) {
     final v = (int.tryParse(controller.text) ?? 3) + delta;
@@ -1443,6 +1494,95 @@ Future<void> showPaywallSheet(BuildContext context, {String? reason}) {
     isScrollControlled: true,
     useSafeArea: true,
     builder: (sheetCtx) => _PaywallSheet(reason: reason),
+  );
+}
+
+/// Right after a successful purchase: say what the money bought, in the
+/// user's own terms. [restored] flips the wording for a Play restore.
+Future<void> showProUnlockedSheet(BuildContext context,
+    {bool restored = false}) async {
+  await showDialog<void>(
+    context: context,
+    builder: (dialogCtx) {
+      final scheme = Theme.of(dialogCtx).colorScheme;
+      void close() => Navigator.pop(dialogCtx);
+      return AlertDialog(
+        icon: Icon(Icons.workspace_premium_rounded,
+            color: kNeonBlue, size: 36),
+        title: Text(restored ? 'Pro is back' : 'You unlocked Pro',
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontWeight: FontWeight.w700)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              restored
+                  ? 'Google Play confirmed your subscription. Everything '
+                      'below is active again.'
+                  : 'Everything below is active right now.',
+              style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 14),
+            for (final b in const [
+              'Unlimited audios and playlists',
+              'No ads, anywhere in the app',
+              'Custom loop range',
+              'Smart looping that learns your counts',
+            ])
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 3),
+                child: Row(children: [
+                  Icon(Icons.check_circle, size: 17, color: kNeonBlue),
+                  const SizedBox(width: 8),
+                  Expanded(
+                      child: Text(b,
+                          style: const TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w500))),
+                ]),
+              ),
+            const SizedBox(height: 12),
+            Text(
+              'Billed by Google Play. The amount and tax shown there is '
+              'what was charged.',
+              style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+            ),
+          ],
+        ),
+        actionsAlignment: MainAxisAlignment.spaceBetween,
+        actions: [
+          TextButton(
+            onPressed: () async {
+              close();
+              try {
+                final saved = await ReceiptPdf.saveToDevice();
+                if (context.mounted && saved) {
+                  showTopToast(context, 'Purchase summary saved');
+                }
+              } catch (err) {
+                debugPrint('receipt: save failed $err');
+                if (context.mounted) {
+                  showTopToast(context, 'Could not create the PDF',
+                      error: true);
+                }
+              }
+            },
+            child: const Text('Download summary'),
+          ),
+          TextButton(
+            onPressed: () async {
+              close();
+              await launchUrl(
+                Uri.parse(ReceiptPdf.manageUrl),
+                mode: LaunchMode.externalApplication,
+              );
+            },
+            child: const Text('Manage subscription'),
+          ),
+          FilledButton(onPressed: close, child: const Text('Done')),
+        ],
+      );
+    },
   );
 }
 
@@ -1505,7 +1645,7 @@ class _PaywallSheetState extends State<_PaywallSheet> {
           if (!mounted) return;
           Navigator.pop(context);
           if (context.mounted) {
-            showTopToast(context, 'Pro unlocked (debug build)');
+            await showProUnlockedSheet(context);
           }
         } else if (context.mounted) {
           showTopToast(context, 'Pro isn\'t live yet — coming soon.', error: true);
@@ -1517,10 +1657,7 @@ class _PaywallSheetState extends State<_PaywallSheet> {
       if (!mounted) return;
       if (report.ok) {
         Navigator.pop(context);
-        if (context.mounted) {
-          showTopToast(context, 'Welcome to Pro · no ads');
-          await _promptDownloadSummary(context);
-        }
+        if (context.mounted) await showProUnlockedSheet(context);
       } else if (report.outcome == PurchaseOutcome.pending) {
         Navigator.pop(context);
         if (context.mounted) showTopToast(context, report.message ?? 'Pending');
@@ -1543,8 +1680,7 @@ class _PaywallSheetState extends State<_PaywallSheet> {
       if (report.ok) {
         Navigator.pop(context);
         if (context.mounted) {
-          showTopToast(context, 'Pro restored');
-          await _promptDownloadSummary(context);
+          await showProUnlockedSheet(context, restored: true);
         }
       } else if (context.mounted) {
         showTopToast(context, report.message ?? 'Nothing to restore',
@@ -1586,30 +1722,6 @@ class _PaywallSheetState extends State<_PaywallSheet> {
 
   /// After a successful purchase, ask if the user wants to download the
   /// purchase summary PDF right now.
-  Future<void> _promptDownloadSummary(BuildContext ctx) async {
-    final ok = await showDialog<bool>(
-      context: ctx,
-      builder: (dialogCtx) => AlertDialog(
-        title: const Text('Download purchase summary?'),
-        content: const Text(
-          'Save a PDF summary of this purchase to your phone. '
-          'Google Play remains the merchant of record; this is not a tax invoice.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogCtx, false),
-            child: const Text('Not now'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogCtx, true),
-            child: const Text('Download'),
-          ),
-        ],
-      ),
-    );
-    if (!mounted || ok != true) return;
-    await _downloadReceipt();
-  }
 
   /// Cancellation always happens in Google Play (the merchant of record).
   /// This sheet only explains the consequence and hands off. Test Store
@@ -1806,11 +1918,14 @@ class _PaywallSheetState extends State<_PaywallSheet> {
                 onPressed: busy ? null : _manage,
                 child: const Text('Manage subscription'),
               ),
-              const SizedBox(height: 6),
-              OutlinedButton(
-                onPressed: busy ? null : _cancelSubscription,
-                child: const Text('Cancel subscription'),
-              ),
+              // Only the RevenueCat Test Store has a local off-switch; a real
+              // Play subscription is cancelled in Play, so there is no second
+              // "cancel" button here.
+              if (e.storeLabel == 'Test Store')
+                OutlinedButton(
+                  onPressed: busy ? null : _cancelSubscription,
+                  child: const Text('End test Pro'),
+                ),
             ] else if (!alreadyPro)
               FilledButton(
                 onPressed: busy ? null : _buy,

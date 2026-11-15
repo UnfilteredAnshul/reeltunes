@@ -1,7 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- just_audio_background / audio_service: media notification + lock screen -->
+    <!-- Media playback service: notification-shade and lock-screen controls -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
@@ -60,24 +60,17 @@
                 <data android:mimeType="text/plain"/>
             </intent-filter>
         </activity>
-        <!-- Required by just_audio_background (built on audio_service) -->
+        <!-- Playback service: owns the MediaSessionCompat and the MediaStyle
+             notification behind the lock-screen and shade player. Dart drives
+             it over the "playback" MethodChannel.
+             stopWithTask=false keeps the player alive when the activity is
+             destroyed; MainActivity clears it on a recents swipe unless the
+             user asked playback to survive one. -->
         <service
-            android:name="com.ryanheise.audioservice.AudioService"
+            android:name=".PlaybackService"
             android:foregroundServiceType="mediaPlayback"
-            android:exported="true"
-            tools:ignore="Instantiatable">
-            <intent-filter>
-                <action android:name="android.media.browse.MediaBrowserService"/>
-            </intent-filter>
-        </service>
-        <receiver
-            android:name="com.ryanheise.audioservice.MediaButtonReceiver"
-            android:exported="true"
-            tools:ignore="Instantiatable">
-            <intent-filter>
-                <action android:name="android.intent.action.MEDIA_BUTTON"/>
-            </intent-filter>
-        </receiver>
+            android:exported="false"
+            android:stopWithTask="false"/>
         <!-- Local subscription reminders (3 days, 1 day, exact renewal). -->
         <receiver
             android:name=".ReminderReceiver"
