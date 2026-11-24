@@ -21,6 +21,7 @@ import 'settings_screen.dart';
 import 'sheets.dart';
 import 'top_toast.dart';
 import 'home_screen.dart';
+import 'update_check.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -186,6 +187,9 @@ class _RootScreenState extends State<RootScreen>
       // A folder whose grant was dropped makes every audio unplayable; ask for
       // the same folder right away instead of failing on the first tap.
       unawaited(_maybePromptRelink());
+      // Play in-app update: if the tester's track has a newer build, offer to
+      // install it. No-op for sideloaded builds and when Play is up to date.
+      unawaited(checkForPlayUpdate(context));
       // A code the owner switched off must stop paying for Pro, even if this
       // install redeemed it days ago.
       unawaited(PromoEngine.I.syncGrantEffects());
@@ -803,7 +807,7 @@ class _FirstRunSheetState extends State<FirstRunSheet> {
     if (!mounted) return;
     setState(() => busy = false);
     if (picked == null) return;
-    AppStore.I.completeFirstRun(picked.name ?? defaultSaveFolderName);
+    AppStore.I.completeFirstRun();
     if (mounted) Navigator.pop(context);
   }
 

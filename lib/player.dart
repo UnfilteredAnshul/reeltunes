@@ -48,17 +48,38 @@ class RtPlayer extends ChangeNotifier {
   bool shuffleOn = true;
 
   bool _wasPlayingBeforeInterruption = false;
+  /// Set while "Keep playing during calls" is holding playback through an
+  /// interruption. A play() issued while the call UI owns audio focus is
+  /// rejected, so we retry instead of giving up after one attempt.
+  Timer? _callHold;
+  /// Engine volume, 0..1. Session-only: a fresh launch starts at full volume so
+  /// a muted phone is never mistaken for broken audio.
+  double volume = 1.0;
+  double _volumeBeforeMute = 1.0;
   int _targetLoops = 1;
-  /// Completed passes of the CURRENT track. "3 loops" = the track plays 3
-  /// full times, so with a 3-5 range you get exactly 3, 4 or 5 plays.
-  int _passes = 0;
-  /// True once the loop decision for the pass in flight has been made, so the
-  /// 200 ms position ticks can't count the same ending twice.
+  /// Passes of the CURRENT track that have reached their tail. "3 loops" = the
+  /// track plays 3 full times, so with a 3-5 range you get exactly 3, 4 or 5
+  /// plays. Counted from the last-stretch tick, which fires even when the
+  /// app is backgrounded and the position stream is sparse.
+  int _played = 0;
+  /// True once the current pass reached its last stretch, so one pass can
+  /// never be counted twice by consecutive ticks.
+  bool _endSeen = false;
+  /// True once the engine has been told that the pass in flight is the last
+  /// one. LoopMode is flipped off at the START of that pass, never near its
+  /// end: a platform call that lands late is exactly what made a finished clip
+  /// replay for a moment before the next one started.
   bool _finalPassArmed = false;
   /// The loop target is latched the first time a real duration is known, so
   /// Smart's short-clip boost sees the actual length (not 0 during load).
   bool _targetLatched = false;
   Duration _lastPos = Duration.zero;
+  /// Queue row the [_lastPos] tick belongs to. When this differs from
+  /// [queueIndex] the position went to zero because a NEW track started, not
+  /// because the current one wrapped.
+  int _tickIndex = -1;
+  /// Position ticks inside this window are seek artefacts, not a pass wrap.
+  DateTime _ignoreWrapUntil = DateTime.fromMillisecondsSinceEpoch(0);
   /// Index changes inside this window are user/deck-driven, not "a track
   /// finished its loops" — Smart learning must not treat a skip as a vote.
   DateTime _manualAdvanceUntil = DateTime.fromMillisecondsSinceEpoch(0);
@@ -71,6 +92,9 @@ class RtPlayer extends ChangeNotifier {
   /// otherwise be interpreted as "a track finished" and move the UI to a row
   /// that does not match what is actually playing.
   bool _queueSurgery = false;
+  /// Guards the cycle reload: `completed` can land while the new source list
+  /// is still loading, and wrapping twice would reshuffle and reload again.
+  bool _wrapping = false;
   bool get queuePlayable => queue.isNotEmpty && queueIndex >= 0;
 
   bool get playing {
@@ -158,6 +182,7 @@ class RtPlayer extends ChangeNotifier {
       debugPrint('audio session configure failed: $e');
     }
     final ap = AudioPlayer(handleInterruptions: false);
+    unawaited(ap.setVolume(volume));
     // Engine state is the single source of truth for the UI: play/pause
     // glyphs flip the instant the platform changes, no matter who initiated
     // it (mini bar, player sheet, notification, headset, interruption).
@@ -178,7 +203,13 @@ class RtPlayer extends ChangeNotifier {
     // no public interruption stream) so "keep playing during calls" works.
     asess.AudioSession.instance.then((session) {
       session.interruptionEventStream.listen(_onInterruption);
-      session.becomingNoisyEventStream.listen((_) => ap.pause());
+      // Headphones unplugged: pause and forget the pre-interruption state, so
+      // nothing resumes when they are plugged back in.
+      session.becomingNoisyEventStream.listen((_) {
+        _stopHold();
+        _wasPlayingBeforeInterruption = false;
+        ap.pause();
+      });
     });
     // Notification / media-widget / auto-advance driven index changes stay in
     // sync here.
@@ -206,40 +237,146 @@ class RtPlayer extends ChangeNotifier {
   Stream<bool> get playingStream =>
       _booted && _ap != null ? _ap!.playingStream : const Stream<bool>.empty();
 
-  /// Fisher–Yates with a fresh RNG per call, then move the tapped track to
-  /// the front. A new Random() is seeded with process entropy, so restarting
-  /// the app always yields a different order — no cursed 2→5→1→3 replays.
-  List<Track> _shuffled(List<Track> src, Track head) {
+  /// Fisher–Yates with a fresh secure RNG per call. The old time-seeded
+  /// `Random` could repeat a whole permutation when two deals landed in the
+  /// same tick (and left the order suspiciously close between cycles); a
+  /// CSPRNG removes that class of "same shuffle twice" bugs entirely.
+  Random _rng() {
+    try {
+      return Random.secure();
+    } catch (_) {
+      return Random(DateTime.now().microsecondsSinceEpoch);
+    }
+  }
+
+  List<Track> _fisherYates(List<Track> src) {
     final list = List.of(src);
-    final rnd = Random(DateTime.now().microsecondsSinceEpoch ^
-        DartHashSeedRandomSalt);
+    final rnd = _rng();
     for (var i = list.length - 1; i > 0; i--) {
       final j = rnd.nextInt(i + 1);
       final tmp = list[i];
       list[i] = list[j];
       list[j] = tmp;
     }
-    list.removeWhere((t) => t.id == head.id);
+    return list;
+  }
+
+  bool _sameOrder(List<Track> a, List<Track> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].id != b[i].id) return false;
+    }
+    return true;
+  }
+
+  /// Shuffle order for a new cycle: [head] plays first, then everything else
+  /// exactly once. That is the whole no-repeats guarantee — one cycle is a
+  /// permutation of the context, so no audio can come back before every other
+  /// one has played.
+  List<Track> _shuffled(List<Track> src, Track head) {
+    final list = _fisherYates(src)..removeWhere((t) => t.id == head.id);
     return [head, ...list];
   }
 
+  /// Permutation for the NEXT cycle, reshuffled from scratch. The audio that
+  /// just finished is pushed off the head, so a cycle never restarts on the
+  /// same song it ended with.
+  ///
+  /// Two hard guarantees on top of the shuffle: the new cycle never repeats the
+  /// order that just finished, and never opens on the same audio as it. Both
+  /// re-deal if the draw lands there, so "the second shuffle looked identical"
+  /// cannot come from the deal itself.
+  List<Track> _nextCycle(List<Track> src, String? lastId) {
+    if (src.length < 2) return List.of(src);
+    final oldHead = src.first.id;
+    var list = _fisherYates(src);
+    var guard = 0;
+    while (guard++ < 8 && (_sameOrder(list, src) || list.first.id == oldHead)) {
+      list = _fisherYates(src);
+    }
+    if (list.first.id == lastId) {
+      final j = 1 + _rng().nextInt(list.length - 1);
+      final tmp = list[0];
+      list[0] = list[j];
+      list[j] = tmp;
+    }
+    return list;
+  }
+
+  /// True when [ctx] holds the same audios as the queue already loaded, so the
+  /// cycle in flight can be kept instead of reshuffled. Order is irrelevant:
+  /// the queue is a permutation of the context, membership is what counts.
+  bool _sameCycle(List<Track> ctx) {
+    if (queue.isEmpty || ctx.length != queue.length) return false;
+    final ids = {for (final t in queue) t.id};
+    for (final t in ctx) {
+      if (!ids.contains(t.id)) return false;
+    }
+    return true;
+  }
+
   Future<void> play(Track t,
-      {List<Track>? context, String? playingFrom}) async {
-    var ctx = context ?? queue;
+      {List<Track>? context,
+      String? playingFrom,
+      bool freshCycle = false}) async {
+    final ctx = context ?? queue;
     this.playingFrom = playingFrom ??
         (AppStore.I.selectedFolderId == null
             ? 'All'
             : (AppStore.I.folderById(AppStore.I.selectedFolderId!)?.name ??
                 'All'));
-    if (shuffleOn) {
-      queue = _shuffled(ctx, t);
-    } else if (ctx.isNotEmpty) {
-      queue = ctx;
-    } else {
-      queue = [t];
+    _markManualAdvance();
+    final inQueue = queue.indexWhere((x) => x.id == t.id);
+
+    // Already inside the cycle in flight: jump to it instead of rebuilding the
+    // order. Rebuilding was the real "shuffle repeats songs" bug — every tap
+    // threw the half-played cycle away and dealt a fresh one.
+    if (!freshCycle &&
+        inQueue >= 0 &&
+        _booted &&
+        _ap != null &&
+        _sameCycle(ctx)) {
+      if (inQueue == queueIndex) {
+        queueIndex = inQueue;
+        current = queue[inQueue];
+        await _whenReady();
+        try {
+          await _ap!.seek(Duration.zero);
+          _newTrackLoops();
+          unawaited(_ap!.play());
+        } catch (e, s) {
+          reportError('replay failed', e, s);
+        }
+      } else {
+        await _whenReady();
+        try {
+          await _ap!.seek(Duration.zero, index: inQueue);
+          // A seek does not resume: tapping a row while paused must play it.
+          unawaited(_ap!.play());
+        } catch (e, s) {
+          reportError('jump failed', e, s);
+          queueIndex = inQueue;
+          await _startCurrent();
+        }
+      }
+      _pushMediaState();
+      _silentFire();
+      return;
     }
-    queueIndex = 0;
-    current = queue.first;
+
+    if (ctx.isEmpty) {
+      queue = [t];
+    } else if (shuffleOn && ctx.length > 1) {
+      queue = _shuffled(ctx, t);
+    } else {
+      queue = List.of(ctx);
+    }
+    queueIndex = queue.indexWhere((x) => x.id == t.id);
+    if (queueIndex < 0) {
+      queue = [t, ...queue];
+      queueIndex = 0;
+    }
+    current = queue[queueIndex];
     return _startCurrent();
   }
 
@@ -378,6 +515,8 @@ class RtPlayer extends ChangeNotifier {
     await _whenReady();
     final ap = _ap!;
     if (ap.playing) {
+      _stopHold();
+      _wasPlayingBeforeInterruption = false;
       await ap.pause();
     } else {
       // play() completes only when playback stops — never await it.
@@ -400,6 +539,8 @@ class RtPlayer extends ChangeNotifier {
   Future<void> pause() async {
     if (current == null) return;
     await _whenReady();
+    _stopHold();
+    _wasPlayingBeforeInterruption = false;
     await _ap!.pause();
     _pushMediaState();
     _silentFire();
@@ -409,16 +550,32 @@ class RtPlayer extends ChangeNotifier {
   Future<void> stopFromSystem() async {
     if (current == null) return;
     await _whenReady();
+    _stopHold();
+    _wasPlayingBeforeInterruption = false;
     await _ap!.pause();
     await PlaybackNotification.clear();
     _silentFire();
   }
+
+  /// Engine volume, 0..1, shared by the volume slider and the speaker button.
+  Future<void> setVolume(double v) async {
+    await _whenReady();
+    volume = v.clamp(0.0, 1.0);
+    if (volume > 0) _volumeBeforeMute = volume;
+    await _ap?.setVolume(volume);
+    _silentFire();
+  }
+
+  /// Speaker tap: mute at 0, restore the previous level on the second tap.
+  Future<void> toggleMute() =>
+      setVolume(volume > 0 ? 0 : (_volumeBeforeMute > 0 ? _volumeBeforeMute : 1));
 
   Future<void> seek(double fraction) async {
     await _whenReady();
     final d = _ap!.duration;
     if (d != null) {
       await _ap!.seek(d * fraction);
+      _noteSeek();
       _pushMediaState();
     }
   }
@@ -427,6 +584,7 @@ class RtPlayer extends ChangeNotifier {
   Future<void> seekToMillis(int ms) async {
     await _whenReady();
     await _ap!.seek(Duration(milliseconds: ms));
+    _noteSeek();
     _pushMediaState();
   }
 
@@ -458,6 +616,7 @@ class RtPlayer extends ChangeNotifier {
     await _whenReady();
     if (_ap!.position > const Duration(seconds: 3)) {
       await _ap!.seek(Duration.zero);
+      _noteSeek();
       return;
     }
     // Spotify-style: restart when <3 s in; otherwise jump to the previous
@@ -465,6 +624,7 @@ class RtPlayer extends ChangeNotifier {
     final prev = (queueIndex - 1 + queue.length) % queue.length;
     if (prev == queueIndex || queue.isEmpty) {
       await _ap!.seek(Duration.zero);
+      _noteSeek();
       return;
     }
     _markManualAdvance();
@@ -473,6 +633,7 @@ class RtPlayer extends ChangeNotifier {
     } catch (e, s) {
       reportError('previous failed', e, s);
       await _ap!.seek(Duration.zero);
+      _noteSeek();
     }
     _pushMediaState();
   }
@@ -484,9 +645,9 @@ class RtPlayer extends ChangeNotifier {
     _silentFire();
   }
 
-  /// Shuffle is on by default (ReelTunes' identity). Toggling it only
-  /// changes the order used by the NEXT play()/queue build — the current
-  /// queue keeps playing untouched.
+  /// Shuffle is on by default (ReelTunes' identity). Toggling applies from the
+  /// next cycle / next play(): the queue already loaded keeps playing in the
+  /// order it was dealt, so nothing in flight is interrupted.
   void toggleShuffle() {
     shuffleOn = !shuffleOn;
     _silentFire();
@@ -494,19 +655,24 @@ class RtPlayer extends ChangeNotifier {
 
   // ---- per-track looping -------------------------------------------------
   //
-  // Why not ProcessingState.completed? Inside a ConcatenatingAudioSource the
-  // platform auto-advances, so "completed" only ever fires at the END of the
-  // whole queue — the old counter never ran, and every track played once.
+  // Why not ProcessingState.completed? Inside a playlist the platform
+  // auto-advances, so "completed" only ever fires at the END of the whole
+  // queue — the old counter never ran, and every track played once.
   //
   // Now: every track starts in LoopMode.one (ExoPlayer repeat-one = the
-  // current item repeats exactly, gaplessly, even in the background). The
-  // position watcher counts passes and, on the last one, switches loop mode
-  // off so the queue moves on at the natural boundary. Infinite mode simply
-  // never switches it off.
+  // current item repeats exactly, gaplessly, even in the background). Passes
+  // are counted from the wrap the engine performs at the boundary, and the
+  // engine is switched to LoopMode.off at the START of the final pass so the
+  // queue moves on at the natural boundary with no platform call racing it.
   void _newTrackLoops() {
-    _passes = 0;
+    _played = 0;
+    _endSeen = false;
     _finalPassArmed = false;
-    _lastPos = Duration.zero;
+    _lastPos = _ap?.position ?? Duration.zero;
+    _tickIndex = queueIndex;
+    // Ticks that arrive while the new item is being prepared can jump around;
+    // never read one as a wrap.
+    _ignoreWrapUntil = DateTime.now().add(const Duration(milliseconds: 400));
     _targetLatched = _durationSecondsHint() > 0;
     _targetLoops = _loopsTarget();
     _armLoopMode();
@@ -515,61 +681,114 @@ class RtPlayer extends ChangeNotifier {
   void _armLoopMode() {
     final ap = _ap;
     if (ap == null) return;
-    // "Play once" arms the engine off from the start: no position event has to
-    // land in the last 900 ms for a very short clip to advance, and it keeps
-    // working when the app is backgrounded and ticks are sparse.
-    unawaited(
-        ap.setLoopMode(loop == RtLoop.off ? LoopMode.off : LoopMode.one));
+    // "Play once" (and a drawn target of 1) arms the engine off from the very
+    // start: no position event has to land near the end for a very short clip
+    // to advance, and it keeps working when the app is backgrounded and ticks
+    // are sparse.
+    final single = loop != RtLoop.infinite && _targetLoops <= 1;
+    _finalPassArmed = single;
+    unawaited(ap.setLoopMode(single ? LoopMode.off : LoopMode.one));
+  }
+
+  /// Flips the engine off repeat-one for the pass in flight. Idempotent: the
+  /// wrap counter and the end-of-clip safety both call it.
+  void _armFinalPass() {
+    if (_finalPassArmed) return;
+    _finalPassArmed = true;
+    unawaited(_ap?.setLoopMode(LoopMode.off));
   }
 
   void _markManualAdvance() {
     _manualAdvanceUntil = DateTime.now().add(const Duration(seconds: 1));
   }
 
+  /// Manual seeks are not pass wraps. They land the position at the head of
+  /// the clip and would otherwise look like the engine repeating the final
+  /// pass (which would make the player skip ahead mid-scrub).
+  void _noteSeek() {
+    _ignoreWrapUntil = DateTime.now().add(const Duration(milliseconds: 700));
+    _lastPos = _ap?.position ?? Duration.zero;
+  }
+
   void _onPosition(Duration pos) {
+    // A new queue row means the position is small because the track changed,
+    // not because this one wrapped. `_newTrackLoops` already reset the baseline.
+    if (_tickIndex != queueIndex) {
+      _tickIndex = queueIndex;
+      _lastPos = pos;
+      return;
+    }
     final last = _lastPos;
     _lastPos = pos;
 
-    // A backward jump after arming means LoopMode.one wrapped the track to
-    // zero: this is the start of the next pass, so re-arm the boundary
-    // decision. (Seeking backwards by hand lands here too — harmless.)
-    if (_finalPassArmed &&
-        pos < last - const Duration(milliseconds: 300)) {
-      _finalPassArmed = false;
-      return;
-    }
-
-    // Play-once never loops: the engine was armed off when the track loaded.
-    if (loop == RtLoop.off) return;
-
     final d = _ap?.duration;
     if (d == null || d.inMilliseconds <= 0) return;
+    final total = d.inMilliseconds;
 
     // First real duration of this track: latch the target now so Smart's
     // short-clip boost is based on the actual length.
     if (!_targetLatched) {
       _targetLoops = _loopsTarget();
       _targetLatched = true;
+      if (loop != RtLoop.infinite && _targetLoops <= 1) _armFinalPass();
     }
 
-    if (loop == RtLoop.infinite) return; // never advances by itself
-    if (_finalPassArmed) return;
+    // Last stretch of the pass. Counting here (not on the wrap) means a missed
+    // tick at the boundary can never lose a pass.
+    final atTail = pos.inMilliseconds >= total - 500;
+    if (atTail && !_endSeen) {
+      _endSeen = true;
+      _played++;
+      // Fallback only: normally the final pass was armed at its start.
+      if (loop != RtLoop.infinite && _played >= _targetLoops) _armFinalPass();
+    }
 
-    // Decide before the end. Changing loop mode is a platform call, so it
-    // needs a real head start; a wide margin costs nothing because the only
-    // action is "do not repeat at the boundary" — the pass still plays in
-    // full. (Non-final passes are left in LoopMode.one and just count.)
-    final margin = d < const Duration(seconds: 2)
-        ? Duration(milliseconds: (d.inMilliseconds * 0.35).round())
-        : const Duration(milliseconds: 900);
-    if (pos < d - margin) return;
+    // The position went back to the head of the clip on the same queue row:
+    // either the engine repeated it (LoopMode one) or the user scrubbed.
+    final wrapped = last.inMilliseconds > total * 0.7 &&
+        pos.inMilliseconds < total * 0.3 &&
+        pos < last;
 
-    _finalPassArmed = true;
-    _passes++;
-    if (_passes >= _targetLoops) {
-      // Final pass: let ExoPlayer leave this item naturally on time.
-      final ap = _ap;
-      if (ap != null) unawaited(ap.setLoopMode(LoopMode.off));
+    if (wrapped && DateTime.now().isAfter(_ignoreWrapUntil)) {
+      _ignoreWrapUntil = DateTime.now().add(const Duration(milliseconds: 800));
+      // The engine repeated a pass that was already armed as the last one: the
+      // platform call lost the race. Cut the replay at once instead of letting
+      // the finished clip play again.
+      if (_finalPassArmed) {
+        _finalPassArmed = false;
+        unawaited(_advanceAfterReplay());
+        return;
+      }
+    }
+
+    // Start of a new pass (the head of the clip, right after a wrap): if this
+    // is the final one, arm the engine off NOW so nothing has to happen at the
+    // boundary.
+    if (pos.inMilliseconds < total * 0.3) {
+      _endSeen = false;
+      if (!_finalPassArmed &&
+          loop != RtLoop.infinite &&
+          _played + 1 >= _targetLoops) {
+        _armFinalPass();
+      }
+    }
+  }
+
+  /// The engine wrapped a pass that should have been the last one. Move on at
+  /// once so the user hears ~200 ms of the replay at most, never a full pass.
+  Future<void> _advanceAfterReplay() async {
+    final ap = _ap;
+    if (ap == null || queue.isEmpty) return;
+    try {
+      if (queueIndex + 1 < queue.length) {
+        await ap.seek(Duration.zero, index: queueIndex + 1);
+      } else {
+        await _wrapCycle();
+      }
+      _pushMediaState();
+      _silentFire();
+    } catch (e, s) {
+      reportError('advance after repeat failed', e, s);
     }
   }
 
@@ -584,7 +803,7 @@ class RtPlayer extends ChangeNotifier {
     if (natural &&
         loop == RtLoop.customRange &&
         _targetLoops > 0 &&
-        _passes >= _targetLoops) {
+        _finalPassArmed) {
       AppStore.I.recordLoopCount(_targetLoops);
     }
     queueIndex = i;
@@ -596,8 +815,8 @@ class RtPlayer extends ChangeNotifier {
     _silentFire();
   }
 
-  /// Queue exhausted (last pass of the last item). Wrap to the top instead of
-  /// stopping dead — playback here is an endless reel loop.
+  /// Queue exhausted (last pass of the last item). Start a fresh cycle instead
+  /// of stopping dead — playback here is an endless reel loop.
   Future<void> _onPlaylistEnd() async {
     // A removal can push the engine into "completed" while `queue` is being
     // rebuilt — that is not the end of the queue, so don't seek to the top.
@@ -607,38 +826,125 @@ class RtPlayer extends ChangeNotifier {
     // custom-range completion before wrapping (same Smart-learning signal).
     if (loop == RtLoop.customRange &&
         _targetLoops > 0 &&
-        _passes >= _targetLoops) {
+        _finalPassArmed) {
       AppStore.I.recordLoopCount(_targetLoops);
     }
     _markManualAdvance();
-    try {
-      await _ap!.seek(Duration.zero, index: 0);
-      _newTrackLoops();
-      unawaited(_ap!.play());
-    } catch (e, s) {
-      reportError('wrap-around failed', e, s);
-    }
+    await _wrapCycle();
     _pushMediaState();
     _silentFire();
   }
 
-  /// Audio-focus interruptions (calls, alarms, other apps). Default pauses;
-  /// when the user has enabled "keep playing during calls" we try to ride
-  /// through them instead.
+  /// Restarts the queue from its first item. With shuffle on, the next cycle is
+  /// a brand-new permutation (reloaded, since the engine's own order can only
+  /// be replaced by loading a new source list). With one audio, or shuffle
+  /// off, it is the same order replayed — no reload, so the join is gapless.
+  Future<void> _wrapCycle() async {
+    final ap = _ap;
+    if (ap == null || queue.isEmpty) return;
+    if (_wrapping) return;
+    _wrapping = true;
+    try {
+      if (!shuffleOn || queue.length < 2) {
+        try {
+          await ap.seek(Duration.zero, index: 0);
+          queueIndex = 0;
+          current = queue.first;
+          _newTrackLoops();
+          unawaited(ap.play());
+        } catch (e, s) {
+          reportError('wrap-around failed', e, s);
+        }
+        return;
+      }
+      queue = _nextCycle(queue, current?.id);
+      queueIndex = 0;
+      current = queue.first;
+      await _startCurrent();
+    } finally {
+      _wrapping = false;
+    }
+  }
+
+  /// Audio-focus interruptions (calls, alarms, other apps).
+  ///
+  /// Pausing is the default. With "Keep playing during calls" on, playback is
+  /// held through a pause-type interruption instead: `play()` is retried until
+  /// the call is over, because a single call can be rejected while the call UI
+  /// owns focus (which made the audio go silent for the rest of the track and
+  /// only come back on the NEXT one).
+  ///
+  /// Nothing ever resumes on its own when an interruption ends. That automatic
+  /// resume was the "audio starts playing after I close reels" bug: another app
+  /// going quiet must leave the player exactly as the user left it.
   void _onInterruption(asess.AudioInterruptionEvent e) {
     if (e.begin) {
       _wasPlayingBeforeInterruption = playing;
+      // A duck (notification sound, navigation prompt) never pauses. The OS
+      // lowers the whole media stream while the other app holds transient
+      // focus. Unless the user allowed that dip, take focus straight back so
+      // the volume never drops.
+      if (e.type == asess.AudioInterruptionType.duck) {
+        if (!AppStore.I.lowerVolumeForOtherAudio) unawaited(_reclaimFocus());
+        return;
+      }
       if (!AppStore.I.playDuringCalls) {
         _ap?.pause();
-      } else {
-        // Keep going — re-assert play with fresh focus.
-        _ap?.play();
+        return;
       }
-    } else {
-      if (_wasPlayingBeforeInterruption && !AppStore.I.playDuringCalls) {
-        _ap?.play();
-      }
+      // Only defend a pass that was really in flight — a player the user
+      // paused must never start by itself, call or not.
+      if (_wasPlayingBeforeInterruption) _holdThroughInterruption();
+      return;
     }
+    _stopHold();
+    _wasPlayingBeforeInterruption = false;
+  }
+
+  /// Cancels a duck by dropping and immediately re-requesting audio focus.
+  ///
+  /// audio_session returns early when a focus request is already held, so a
+  /// plain `setActive(true)` is a no-op. Releasing first and asking again with
+  /// GAIN makes the other app lose its transient focus, which ends the duck
+  /// bundle; the engine never pauses, so the position is untouched.
+  bool _reclaiming = false;
+  Future<void> _reclaimFocus() async {
+    if (_reclaiming) return;
+    _reclaiming = true;
+    try {
+      final session = await asess.AudioSession.instance;
+      await session.setActive(false);
+      if (current == null) return;
+      await session.setActive(
+        true,
+        androidAudioFocusGainType: asess.AndroidAudioFocusGainType.gain,
+      );
+      // Some OEMs hand focus back but leave the stream ducked for a moment;
+      // re-asserting play is enough to make the engine push its current volume.
+      if (!playing) unawaited(_ap?.play());
+    } catch (_) {
+      // Focus is best-effort: the music keeps playing either way.
+    } finally {
+      _reclaiming = false;
+    }
+  }
+
+  void _holdThroughInterruption() {
+    _callHold?.cancel();
+    void reassert() {
+      final ap = _ap;
+      if (ap == null || current == null) return;
+      if (!ap.playing) unawaited(ap.play());
+    }
+
+    reassert();
+    _callHold = Timer.periodic(
+        const Duration(milliseconds: 700), (_) => reassert());
+  }
+
+  void _stopHold() {
+    _callHold?.cancel();
+    _callHold = null;
   }
 
   /// A track was removed from the library. Keep playing: the queue drops the
@@ -740,6 +1046,3 @@ class RtPlayer extends ChangeNotifier {
 
   void _silentFire() => notifyListeners();
 }
-
-// A per-process salt so seed differs even if the epoch micros ever collide
-const int DartHashSeedRandomSalt = 0x5f4d9e17;

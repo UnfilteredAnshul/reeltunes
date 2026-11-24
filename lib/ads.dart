@@ -239,17 +239,6 @@ class Ads extends ChangeNotifier {
         onTimeout: () => debugPrint('UMP consent timed out'));
   }
 
-  /// Whether Settings should offer the "Ad privacy choices" row.
-  Future<bool> privacyOptionsRequired() async {
-    try {
-      final status =
-          await ConsentInformation.instance.getPrivacyOptionsRequirementStatus();
-      return status == PrivacyOptionsRequirementStatus.required;
-    } catch (_) {
-      return false;
-    }
-  }
-
   /// Re-opens the consent / privacy options form (required entry point for
   /// every app that serves ads).
   ///

@@ -199,8 +199,6 @@ class NotificationService {
   /// Kept as a no-op so `Entitlements` does not need to change.
   Future<void> refreshPerkNotifications() async {}
 
-  Future<void> cancelPerkNotifications() async {}
-
   String _title(String plan, int days, {required bool renew, required bool sandbox}) {
     final prefix = sandbox ? 'Test Pro' : 'Pro';
     final tail = days == 3 ? 'in 3 days' : 'tomorrow';

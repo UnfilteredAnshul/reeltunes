@@ -224,12 +224,16 @@ class PromoEngine extends ChangeNotifier {
   }
 
   Future<PromoResult> _applyRemote(PromoApiResult remote) async {
-    final code = remote.code.isEmpty ? normalize(remote.data['code'] ?? '') : remote.code;
+    final code = remote.code.isEmpty
+        ? normalize(remote.data['code'] ?? '')
+        : remote.code;
     if (remote.lifetime) {
       await Entitlements.I.setCodeGrant(lifetime: true, code: code);
     } else {
       if (remote.days <= 0) return PromoResult.fail("That code isn't valid");
-      final until = Entitlements.I.codeGrantBase.add(Duration(days: remote.days));
+      final until = Entitlements.I.codeGrantBase.add(
+        Duration(days: remote.days),
+      );
       await Entitlements.I.setCodeGrant(until: until, code: code);
     }
     await _logRedemption(
@@ -239,7 +243,9 @@ class PromoEngine extends ChangeNotifier {
     );
     if (remote.lifetime) return PromoResult.ok('Pro unlocked on this device');
     final end = Entitlements.I.codeGrantUntil;
-    return PromoResult.ok(end == null ? 'Pro unlocked' : 'Pro until ${_fmt(end)}');
+    return PromoResult.ok(
+      end == null ? 'Pro unlocked' : 'Pro until ${_fmt(end)}',
+    );
   }
 
   /// Local registry only. Returns null when this code is not in the local
@@ -287,27 +293,71 @@ class PromoEngine extends ChangeNotifier {
 
   // ---- grant effects -----------------------------------------------------
 
-  /// Applies the owner's "Remove effects" switch to this install.
+  /// Applies the owner's "Remove effects" switch to this install, and puts the
+  /// Pro back when the switch is flipped to "Restore effects".
   ///
-  /// Only a code grant can be removed; a Play purchase and a live trial are
-  /// untouched. Called on launch/resume, never polled: offline keeps the grant
-  /// until the next check.
+  /// Removing only hides the grant: the code and its end time stay on disk, so
+  /// restoring is a flag flip, not a second redemption. A device that already
+  /// lost its grant to the old behaviour (the switch used to erase it) is
+  /// recovered from the local redemption log.
+  ///
+  /// Only a code grant can be touched; a Play purchase and a live trial are
+  /// never affected. Called on launch/resume, never polled: offline keeps
+  /// whatever the device has until the next check.
   Future<void> syncGrantEffects() async {
-    final code = Entitlements.I.codeGrantCode;
+    final raw = Entitlements.I.grantCodeRaw;
+    final fromLog = raw == null ? _newestRedeemableLogEntry() : null;
+    final code = raw ?? fromLog?['code']?.toString();
     if (code == null || code.isEmpty) return;
     if (code == masterCode || code == resetCode) return;
     try {
       final removed = await PromoApi.I.grantEffectsRemoved(code);
-      if (!removed) return;
-      // Re-read after the await: the user may have redeemed a different code
-      // in the meantime.
-      if (Entitlements.I.codeGrantCode != code) return;
-      await Entitlements.I.clearCodeGrant();
+      if (removed) {
+        // Keep the grant on disk; just stop paying for Pro with it.
+        await Entitlements.I.setCodeGrantEffectsRemoved(true);
+        await LibrarySync.mirror();
+        notifyListeners();
+        return;
+      }
+      if (raw != null) {
+        if (!Entitlements.I.codeGrantEffectsRemoved) return;
+        await Entitlements.I.setCodeGrantEffectsRemoved(false);
+        await LibrarySync.mirror();
+        notifyListeners();
+        return;
+      }
+      // No grant at all but the log remembers one: the owner restored it.
+      final lifetime = fromLog?['lifetime'] == true;
+      final untilMs = (fromLog?['untilMs'] as num?)?.toInt();
+      if (lifetime) {
+        await Entitlements.I.setCodeGrant(lifetime: true, code: code);
+      } else if (untilMs != null &&
+          untilMs > DateTime.now().millisecondsSinceEpoch) {
+        await Entitlements.I.setCodeGrant(
+          until: DateTime.fromMillisecondsSinceEpoch(untilMs),
+          code: code,
+        );
+      } else {
+        return;
+      }
       await LibrarySync.mirror();
       notifyListeners();
     } on PromoApiException {
       // Offline: keep Pro. The next launch/resume checks again.
     }
+  }
+
+  /// Newest redemption made by this device whose Pro time has not run out.
+  /// Used to rebuild a grant that an earlier build erased on "Remove effects".
+  Map<String, dynamic>? _newestRedeemableLogEntry() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final entry in _log) {
+      if (entry['device']?.toString() != _deviceId) continue;
+      if (entry['lifetime'] == true) return entry;
+      final untilMs = (entry['untilMs'] as num?)?.toInt();
+      if (untilMs != null && untilMs > now) return entry;
+    }
+    return null;
   }
 
   // ---- helpers -----------------------------------------------------------

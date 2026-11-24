@@ -21,19 +21,6 @@ enum RtLoop { off, smart, customRange, infinite }
 
 enum SortBy { manual, name, dateAdded }
 
-/// Date-added filter for the library. Session-only on purpose: a fresh
-/// launch always shows the whole library.
-enum DateFilter { any, today, week, month }
-
-extension DateFilterLabel on DateFilter {
-  String get label => switch (this) {
-        DateFilter.any => 'Any time',
-        DateFilter.today => 'Today',
-        DateFilter.week => 'Last 7 days',
-        DateFilter.month => 'Last 30 days',
-      };
-}
-
 class Folder {
   final String id;
   String name;
@@ -111,11 +98,10 @@ class AppStore extends ChangeNotifier {
   AppThemeMode themeMode = AppThemeMode.system;
   ViewMode folderView = ViewMode.grid;
   ViewMode trackView = ViewMode.list;
-  String saveFolder = ''; // absolute path; empty until first-run setup
   bool firstRunDone = false;
 
   /// The audios folder as a SAF tree. Android denies raw paths in Download, so
-  /// this is the real storage location; [saveFolder] is legacy display state.
+  /// this is the real storage location.
   bool audiosLinked = false;
   String audiosUri = '';
   String audiosName = '';
@@ -153,6 +139,10 @@ class AppStore extends ChangeNotifier {
   /// again" checkbox that flips this off; Settings can turn it back on.
   bool confirmPlaylistDelete = true;
   bool playDuringCalls = false; // keep audio playing when a call comes in
+  /// Let the OS duck the music while a notification sound or another app's
+  /// short clip plays. Off by default: the volume dip is the "attenuation"
+  /// users hear on every WhatsApp notification.
+  bool lowerVolumeForOtherAudio = false;
   /// Whether the player and media notification survive swiping the app out of
   /// recents. Default OFF (strict): swiping kills playback and the notification.
   /// Absolute — whatever the checkbox says is what happens.
@@ -179,10 +169,15 @@ class AppStore extends ChangeNotifier {
   /// though playback always starts paused.
   String lastTrackId = '';
 
-  // Library search + date filter (session state — deliberately not persisted,
-  // so relaunching always shows everything).
+  /// Playback history, newest first, capped to [maxRecent] and de-duplicated.
+  /// This is what Home shows under "Recently played" — [tracks] is library
+  /// order, not listening order, so it was showing the newest *imports*.
+  List<String> recentTrackIds = [];
+  static const int maxRecent = 20;
+
+  // Library search (session state — deliberately not persisted, so
+  // relaunching always shows everything).
   String searchQuery = '';
-  DateFilter dateFilter = DateFilter.any;
 
   /// Whether the playlist list/grid under the chip strip is open. Session
   /// state: collapsing is a quick "get it out of the way", not a preference.
@@ -202,8 +197,6 @@ class AppStore extends ChangeNotifier {
   /// repeat lookup is one tap.
   List<String> recentSearches = [];
   static const int maxRecentSearches = 8;
-
-  bool get fullPro => Entitlements.I.isPro;
 
   /// Files the folder scan had to leave out because the free tier is full.
   /// Drives the "N more files in your folder · Pro to add" row. Never a
@@ -238,7 +231,6 @@ class AppStore extends ChangeNotifier {
     themeMode = AppThemeMode.values[_prefs.getInt('themeMode') ?? 0];
     folderView = ViewMode.values[_prefs.getInt('folderView') ?? 1];
     trackView = ViewMode.values[_prefs.getInt('trackView') ?? 0];
-    saveFolder = _prefs.getString('saveFolder') ?? '';
     firstRunDone = _prefs.getBool('firstRunDone') ?? false;
     rangeMin = _prefs.getInt('rangeMin') ?? 3;
     rangeMax = _prefs.getInt('rangeMax') ?? 5;
@@ -248,6 +240,8 @@ class AppStore extends ChangeNotifier {
     confirmRemove = _prefs.getBool('confirmRemove') ?? true;
     confirmPlaylistDelete = _prefs.getBool('confirmPlaylistDelete') ?? true;
     playDuringCalls = _prefs.getBool('playDuringCalls') ?? false;
+    lowerVolumeForOtherAudio =
+        _prefs.getBool('lowerVolumeForOtherAudio') ?? false;
     surviveRecentsSwipe = _prefs.getBool('surviveRecentsSwipe') ?? false;
     sortBy = SortBy.values[_prefs.getInt('sortBy') ?? 2];
     sortAsc = _prefs.getBool('sortAsc') ?? false;
@@ -257,6 +251,12 @@ class AppStore extends ChangeNotifier {
     guideBannerDismissed = _prefs.getBool('guideBannerDismissed') ?? false;
     hiddenFileNames = _prefs.getStringList('hiddenFileNames') ?? const [];
     lastTrackId = _prefs.getString('lastTrackId') ?? '';
+    recentTrackIds = _prefs.getStringList('recentTrackIds') ?? const [];
+    // Upgrading from a build that only kept lastTrackId: seed the history with
+    // it so Home is not empty until the next track change.
+    if (recentTrackIds.isEmpty && lastTrackId.isNotEmpty) {
+      recentTrackIds = [lastTrackId];
+    }
     loopHistory = (_prefs.getStringList('loopHistory') ?? const <String>[])
         .map(int.tryParse)
         .whereType<int>()
@@ -288,7 +288,6 @@ class AppStore extends ChangeNotifier {
     _prefs.setInt('themeMode', themeMode.index);
     _prefs.setInt('folderView', folderView.index);
     _prefs.setInt('trackView', trackView.index);
-    _prefs.setString('saveFolder', saveFolder);
     _prefs.setBool('firstRunDone', firstRunDone);
     _prefs.setInt('rangeMin', rangeMin);
     _prefs.setInt('rangeMax', rangeMax);
@@ -296,6 +295,7 @@ class AppStore extends ChangeNotifier {
     _prefs.setBool('confirmRemove', confirmRemove);
     _prefs.setBool('confirmPlaylistDelete', confirmPlaylistDelete);
     _prefs.setBool('playDuringCalls', playDuringCalls);
+    _prefs.setBool('lowerVolumeForOtherAudio', lowerVolumeForOtherAudio);
     _prefs.setBool('surviveRecentsSwipe', surviveRecentsSwipe);
     _prefs.setInt('sortBy', sortBy.index);
     _prefs.setBool('sortAsc', sortAsc);
@@ -306,6 +306,7 @@ class AppStore extends ChangeNotifier {
     _prefs.setBool('guideBannerDismissed', guideBannerDismissed);
     _prefs.setStringList('hiddenFileNames', hiddenFileNames);
     _prefs.setString('lastTrackId', lastTrackId);
+    _prefs.setStringList('recentTrackIds', recentTrackIds);
     _prefs.setStringList(
         'loopHistory', [for (final n in loopHistory) '$n']);
     try {
@@ -402,13 +403,6 @@ class AppStore extends ChangeNotifier {
     _persist();
   }
 
-  void setFolderEmoji(String id, String emoji) {
-    final f = folderById(id);
-    if (f == null || emoji.isEmpty || f.emoji == emoji) return;
-    f.emoji = emoji;
-    _persist();
-  }
-
   void addTrack(Track t) {
     // Adding something explicitly always wins over an earlier "remove from
     // ReelTunes", otherwise the folder scan would keep suppressing it.
@@ -444,17 +438,40 @@ class AppStore extends ChangeNotifier {
       lastTrackId = '';
       _prefs.setString('lastTrackId', '');
     }
+    if (recentTrackIds.remove(id)) {
+      _prefs.setStringList('recentTrackIds', recentTrackIds);
+    }
     _persist();
   }
 
   /// Records what the player has loaded so the mini bar can show it again after
-  /// a relaunch. Plain pref write (no library save/mirror) — this fires on every
+  /// a relaunch. Plain pref write (no library save/mirror) - this fires on every
   /// track change.
   void setLastPlayedId(String id) {
-    if (lastTrackId == id) return;
+    final recentChanged = recentTrackIds.isEmpty || recentTrackIds.first != id;
+    if (recentChanged) {
+      recentTrackIds.remove(id);
+      recentTrackIds.insert(0, id);
+      if (recentTrackIds.length > maxRecent) {
+        recentTrackIds.removeRange(maxRecent, recentTrackIds.length);
+      }
+      _prefs.setStringList('recentTrackIds', recentTrackIds);
+    }
+    if (lastTrackId == id && !recentChanged) return;
     lastTrackId = id;
     _prefs.setString('lastTrackId', id);
     notifyListeners();
+  }
+
+  /// Listening history as real tracks, newest first. Ids that no longer exist
+  /// (removed audio) are skipped instead of leaving holes.
+  List<Track> get recentTracks {
+    final out = <Track>[];
+    for (final id in recentTrackIds) {
+      final t = trackById(id);
+      if (t != null) out.add(t);
+    }
+    return out;
   }
 
   void renameTrack(String id, String title) {
@@ -478,13 +495,14 @@ class AppStore extends ChangeNotifier {
   void setThemeMode(AppThemeMode m) => _mutateSetting(() => themeMode = m);
   void setFolderView(ViewMode v) => _mutateSetting(() => folderView = v);
   void setTrackView(ViewMode v) => _mutateSetting(() => trackView = v);
-  void setSaveFolder(String p) => _mutateSetting(() => saveFolder = p);
 
   void setConfirmDelete(bool v) => _mutateSetting(() => confirmDelete = v);
   void setConfirmRemove(bool v) => _mutateSetting(() => confirmRemove = v);
   void setConfirmPlaylistDelete(bool v) =>
       _mutateSetting(() => confirmPlaylistDelete = v);
   void setPlayDuringCalls(bool v) => _mutateSetting(() => playDuringCalls = v);
+  void setLowerVolumeForOtherAudio(bool v) =>
+      _mutateSetting(() => lowerVolumeForOtherAudio = v);
   void setSurviveRecentsSwipe(bool v) => _mutateSetting(() => surviveRecentsSwipe = v);
   /// Picks a sort for the current view. All audios keeps its own date/name
   /// choice; a playlist remembers the choice for that playlist only.
@@ -572,10 +590,6 @@ class AppStore extends ChangeNotifier {
   bool get canRearrangeTracks =>
       selectedFolderId != null && activeSortBy == SortBy.manual;
 
-  void setRangeMin(int v) =>
-      _mutateSetting(() => rangeMin = v.clamp(1, rangeMax));
-  void setRangeMax(int v) =>
-      _mutateSetting(() => rangeMax = v.clamp(rangeMin, 999));
   /// Sets both ends in one go (a min above the old max must not get clamped
   /// away before the new max lands).
   void setRange(int min, int max) => _mutateSetting(() {
@@ -583,7 +597,6 @@ class AppStore extends ChangeNotifier {
         rangeMax = max.clamp(1, 999);
         if (rangeMax < rangeMin) rangeMax = rangeMin;
       });
-  String get rangeLabel => '$rangeMin-${rangeMax}x';
 
   /// Remembers a loop session the user actually listened through. Only full
   /// custom-range completions are recorded — a skip is not a preference.
@@ -604,49 +617,7 @@ class AppStore extends ChangeNotifier {
     return loopHistory[Random().nextInt(loopHistory.length)].clamp(1, 99);
   }
 
-  // ---- physical folders (Downloads/ReelTune Audios/<category>) ----
-  /// Sub-directory on disk for a library folder: root/category-name.
-  /// Tracks keep living in library.json — the fs layout is an optimization,
-  /// never the source of truth, so "All" always lists everything.
-  String? directoryForFolder(String? folderId) {
-    if (folderId == null) return saveFolderWithRoot();
-    final f = folderById(folderId);
-    if (f == null) return saveFolderWithRoot();
-    final root = saveFolderWithRoot();
-    if (root == null) return null;
-    final safe =
-        f.emoji.replaceAll(RegExp(r'[^A-Za-z0-9 ]'), '').trim() +
-            '_' +
-            f.id;
-    final dir = '$root${Platform.pathSeparator}$safe';
-    try {
-      Directory(dir).createSync(recursive: true);
-    } catch (_) {
-      return root; // fallback: root instead of crashing the intake flow
-    }
-    return dir;
-  }
-
-  String? saveFolderWithRoot() {
-    // root preference; when unset use app-private dir (path from extractor)
-    if (saveFolder.trim().isNotEmpty) return saveFolder;
-    if (_fallbackRootCase == null) {
-      _createFallbackRoot();
-    }
-    return _fallbackRootCase;
-  }
-
-  static String? _fallbackRootCase;
-  Future<void> _createFallbackRoot() async {
-    final docs = await getApplicationDocumentsDirectory();
-    final dir = '${docs.path}${Platform.pathSeparator}audio';
-    try {
-      Directory(dir).createSync(recursive: true);
-    } catch (_) {}
-    _fallbackRootCase = dir;
-  }
-  void completeFirstRun(String folder) {
-    saveFolder = folder;
+  void completeFirstRun() {
     firstRunDone = true;
     _persist();
   }
@@ -665,12 +636,6 @@ class AppStore extends ChangeNotifier {
   void setSearchQuery(String q) {
     if (searchQuery == q) return;
     searchQuery = q;
-    notifyListeners();
-  }
-
-  void setDateFilter(DateFilter f) {
-    if (dateFilter == f) return;
-    dateFilter = f;
     notifyListeners();
   }
 
@@ -774,13 +739,6 @@ class AppStore extends ChangeNotifier {
     return {for (final i in indexes.take(max)) folders[i].id};
   }
 
-  /// How many playlists exist but are hidden by the Free cap (0 when Pro/under).
-  int get hiddenByFreeCapPlaylists {
-    final max = Entitlements.I.maxPlaylists;
-    if (Entitlements.I.isPro || folders.length <= max) return 0;
-    return folders.length - max;
-  }
-
   /// Folders a Free plan is allowed to see: newest [maxPlaylists] only.
   /// Extra folders stay in `folders` but are hidden from the UI.
   List<Folder> get visibleFolders {
@@ -789,29 +747,16 @@ class AppStore extends ChangeNotifier {
     return folders.where((f) => capIds.contains(f.id)).toList();
   }
 
-  /// Tracks matching the current folder + name search + date filter, in
-  /// store order. One place so the count, list, grid and play queue agree.
+  /// Tracks matching the current folder + name search, in store order. One
+  /// place so the count, list, grid and play queue agree.
   List<Track> _baseVisible() {
     final sel = selectedFolderId;
     final q = searchQuery.trim().toLowerCase();
     final capIds = _freeCapIds();
-    final now = DateTime.now();
-    final sinceMs = switch (dateFilter) {
-      DateFilter.any => 0,
-      DateFilter.today =>
-        DateTime(now.year, now.month, now.day).millisecondsSinceEpoch,
-      DateFilter.week =>
-        now.subtract(const Duration(days: 7)).millisecondsSinceEpoch,
-      DateFilter.month =>
-        now.subtract(const Duration(days: 30)).millisecondsSinceEpoch,
-    };
     return tracks.where((t) {
       if (capIds != null && !capIds.contains(t.id)) return false;
       if (sel != null && !t.folderIds.contains(sel)) return false;
       if (q.isNotEmpty && !t.title.toLowerCase().contains(q)) return false;
-      if (sinceMs > 0 && (t.addedAtMs <= 0 || t.addedAtMs < sinceMs)) {
-        return false;
-      }
       return true;
     }).toList();
   }

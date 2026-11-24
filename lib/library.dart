@@ -1381,7 +1381,11 @@ Future<void> showTrackMenu(BuildContext context, Track t,
         store.renameTrack(t.id, name);
       }
     case _MenuAction.move:
-      await showFolderPick(context, t);
+      // Back arrow in the playlist picker returns here instead of dumping the
+      // user out of the menu entirely.
+      if (await showFolderPick(context, t) && context.mounted) {
+        await showTrackMenu(context, t, allowRearrange: allowRearrange);
+      }
     case _MenuAction.remove:
       await removeTrackFromLibrary(context, t);
     case _MenuAction.delete:
@@ -1672,7 +1676,9 @@ class MiniBar extends StatelessWidget {
             track: t,
             contextTracks:
                 loaded ? const [] : AppStore.I.visibleTracksSorted.toList(),
-            startPlayback: !loaded,
+            // Opening the page is a look, never a play. The play button on the
+            // page starts a remembered track (this used to auto-play on tap).
+            startPlayback: false,
           );
         }
 

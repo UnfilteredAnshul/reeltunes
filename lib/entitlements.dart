@@ -33,6 +33,7 @@ class Entitlements extends ChangeNotifier {
 
   SharedPreferences? _prefs;
   DateTime? _trialStartedAt;
+
   /// The user was offered the trial after setting up their folder and chose
   /// the free plan instead. That choice is final: the trial is forfeited, not
   /// re-offered on every launch.
@@ -49,6 +50,7 @@ class Entitlements extends ChangeNotifier {
   String _storeLabel = 'Google Play';
   List<PurchaseRecord> _purchaseHistory = const [];
   bool _debugPro = false;
+
   /// Debug only: force the Free plan even when a purchase, code grant or the
   /// trial would otherwise make the app Pro. Without this, "Force Pro off" and
   /// "end trial" appear to do nothing on a device that redeemed a Pro code.
@@ -60,6 +62,11 @@ class Entitlements extends ChangeNotifier {
   DateTime? _grantUntil;
   bool _grantLifetime = false;
   String? _grantCode;
+
+  /// The owner switched this code's Pro off from the web dashboard. The grant
+  /// itself stays on disk (code + end time) and is only hidden, so the same
+  /// dashboard switch can put it back without the user re-entering the code.
+  bool _grantEffectsRemoved = false;
 
   /// Offline allowance past the store's expiry date. Play renews silently, so a
   /// phone that is offline at renewal should not drop to Free mid-commute; a
@@ -102,6 +109,7 @@ class Entitlements extends ChangeNotifier {
       _grantUntil = DateTime.fromMillisecondsSinceEpoch(grantMs);
     }
     _grantCode = prefs.getString('grantCode');
+    _grantEffectsRemoved = prefs.getBool('grantEffectsRemoved') ?? false;
     // A coin-shop perk (ad-free window, extra slots) must rebuild every gate
     // that reads `showAds` / `maxTracks`.
     if (!_coinsHooked) {
@@ -140,7 +148,9 @@ class Entitlements extends ChangeNotifier {
     if (_trialStartedAt != null || _trialDeclined) return;
     _trialStartedAt = DateTime.now();
     await _prefs?.setInt(
-        'trialStartMs', _trialStartedAt!.millisecondsSinceEpoch);
+      'trialStartMs',
+      _trialStartedAt!.millisecondsSinceEpoch,
+    );
     _changedWithNotifs();
   }
 
@@ -269,10 +279,27 @@ class Entitlements extends ChangeNotifier {
 
   /// True while a redeemed code is still paying for Pro.
   bool get codeGrantActive {
+    if (_grantEffectsRemoved) return false;
     if (_grantLifetime) return true;
     final end = _grantUntil;
     if (end == null) return false;
     return DateTime.now().isBefore(end);
+  }
+
+  /// The redeemed code even while its Pro is switched off, so the owner's
+  /// "Restore effects" can find it again. [codeGrantCode] stays null when off.
+  String? get grantCodeRaw => _grantCode;
+
+  bool get codeGrantEffectsRemoved => _grantEffectsRemoved;
+
+  /// Dashboard "Remove effects" / "Restore effects" switch, applied on the
+  /// install that redeemed the code.
+  Future<void> setCodeGrantEffectsRemoved(bool removed) async {
+    if (_grantEffectsRemoved == removed) return;
+    _grantEffectsRemoved = removed;
+    final p = _prefs;
+    if (p != null) await p.setBool('grantEffectsRemoved', removed);
+    _changedWithNotifs();
   }
 
   /// End of the code grant, or null for a lifetime code / no grant.
@@ -304,8 +331,7 @@ class Entitlements extends ChangeNotifier {
       isPro ? 1 << 20 : freeMaxTracks + CoinWallet.I.bonusTracks;
   int get maxPlaylists =>
       isPro ? 1 << 20 : freeMaxPlaylists + CoinWallet.I.bonusPlaylists;
-  bool get canUseCustomRange =>
-      isPro || CoinWallet.I.customRangeActive;
+  bool get canUseCustomRange => isPro || CoinWallet.I.customRangeActive;
 
   /// Ads are on for Free only — and a coin-shop "no ads" purchase pauses them
   /// without changing the plan (the shop and earn button stay available).
@@ -314,8 +340,7 @@ class Entitlements extends ChangeNotifier {
   bool canAddTracks(int current, [int adding = 1]) =>
       isPro || current + adding <= maxTracks;
 
-  bool canAddPlaylist(int current) =>
-      isPro || current < maxPlaylists;
+  bool canAddPlaylist(int current) => isPro || current < maxPlaylists;
 
   /// One plain sentence for a blocked import. Null when allowed.
   String? importBlockReason(int current) {
@@ -350,7 +375,9 @@ class Entitlements extends ChangeNotifier {
 
   Future<void> markReminderShown(int days) async {
     await _prefs?.setBool(
-        days <= 1 ? 'reminderShown1' : 'reminderShown3', true);
+      days <= 1 ? 'reminderShown1' : 'reminderShown3',
+      true,
+    );
     _changedWithNotifs();
   }
 
@@ -398,7 +425,9 @@ class Entitlements extends ChangeNotifier {
         await p.remove('proEndsMs');
       } else {
         await p.setInt(
-            'proEndsMs', _subscriptionEndsAt!.millisecondsSinceEpoch);
+          'proEndsMs',
+          _subscriptionEndsAt!.millisecondsSinceEpoch,
+        );
       }
       if (_productId == null) {
         await p.remove('proProductId');
@@ -409,13 +438,17 @@ class Entitlements extends ChangeNotifier {
         await p.remove('proPurchasedAtMs');
       } else {
         await p.setInt(
-            'proPurchasedAtMs', _purchaseDate!.millisecondsSinceEpoch);
+          'proPurchasedAtMs',
+          _purchaseDate!.millisecondsSinceEpoch,
+        );
       }
       if (_originalPurchaseDate == null) {
         await p.remove('proOriginalPurchaseMs');
       } else {
-        await p.setInt('proOriginalPurchaseMs',
-            _originalPurchaseDate!.millisecondsSinceEpoch);
+        await p.setInt(
+          'proOriginalPurchaseMs',
+          _originalPurchaseDate!.millisecondsSinceEpoch,
+        );
       }
       if (_priceString == null) {
         await p.remove('proPriceString');
@@ -427,16 +460,18 @@ class Entitlements extends ChangeNotifier {
         _productId != null &&
         _purchaseDate != null &&
         _purchaseDate!.millisecondsSinceEpoch > 0) {
-      await _rememberPurchase(PurchaseRecord(
-        productId: _productId!,
-        planLabel: planLabel,
-        priceString: _priceString ?? '',
-        purchasedAt: _purchaseDate!,
-        expiresAt: _subscriptionEndsAt,
-        willRenew: _willRenew,
-        sandbox: _sandbox,
-        storeLabel: _storeLabel,
-      ));
+      await _rememberPurchase(
+        PurchaseRecord(
+          productId: _productId!,
+          planLabel: planLabel,
+          priceString: _priceString ?? '',
+          purchasedAt: _purchaseDate!,
+          expiresAt: _subscriptionEndsAt,
+          willRenew: _willRenew,
+          sandbox: _sandbox,
+          storeLabel: _storeLabel,
+        ),
+      );
     }
     // A fresh subscription retires the trial-end nudges: there is nothing left
     // to nag about, and a later lapse should not replay an old reminder.
@@ -451,9 +486,11 @@ class Entitlements extends ChangeNotifier {
   /// `latestPurchaseDate`, so they naturally add a new row.
   Future<void> _rememberPurchase(PurchaseRecord record) async {
     final key = record.purchasedAt.millisecondsSinceEpoch;
-    final exists = _purchaseHistory.any((r) =>
-        r.productId == record.productId &&
-        r.purchasedAt.millisecondsSinceEpoch == key);
+    final exists = _purchaseHistory.any(
+      (r) =>
+          r.productId == record.productId &&
+          r.purchasedAt.millisecondsSinceEpoch == key,
+    );
     if (exists) return;
     final list = <PurchaseRecord>[record, ..._purchaseHistory];
     if (list.length > 25) list.removeRange(25, list.length);
@@ -469,10 +506,12 @@ class Entitlements extends ChangeNotifier {
     try {
       final decoded = jsonDecode(raw);
       if (decoded is! List) return const [];
-      return List.unmodifiable(decoded
-          .map(PurchaseRecord.fromJson)
-          .whereType<PurchaseRecord>()
-          .toList());
+      return List.unmodifiable(
+        decoded
+            .map(PurchaseRecord.fromJson)
+            .whereType<PurchaseRecord>()
+            .toList(),
+      );
     } catch (_) {
       return const [];
     }
@@ -488,6 +527,9 @@ class Entitlements extends ChangeNotifier {
     _grantLifetime = lifetime;
     _grantUntil = lifetime ? null : until;
     _grantCode = code;
+    // A fresh (or restored) grant is live again, even if the owner had the
+    // effects switched off before this point.
+    _grantEffectsRemoved = false;
     final p = _prefs;
     if (p != null) {
       if (_grantUntil == null) {
@@ -497,6 +539,7 @@ class Entitlements extends ChangeNotifier {
       }
       await p.setBool('grantLifetime', _grantLifetime);
       await p.setString('grantCode', code);
+      await p.remove('grantEffectsRemoved');
       // A grant retires the trial-end nudges; nagging a user who just got
       // free Pro is how you get uninstalled.
       await p.remove('reminderShown3');
@@ -509,11 +552,13 @@ class Entitlements extends ChangeNotifier {
     _grantUntil = null;
     _grantLifetime = false;
     _grantCode = null;
+    _grantEffectsRemoved = false;
     final p = _prefs;
     if (p != null) {
       await p.remove('grantUntilMs');
       await p.remove('grantLifetime');
       await p.remove('grantCode');
+      await p.remove('grantEffectsRemoved');
     }
     _changedWithNotifs();
   }
@@ -579,7 +624,9 @@ class Entitlements extends ChangeNotifier {
     if (!kDebugMode) return;
     _trialStartedAt = DateTime.now().subtract(const Duration(days: 6));
     await _prefs?.setInt(
-        'trialStartMs', _trialStartedAt!.millisecondsSinceEpoch);
+      'trialStartMs',
+      _trialStartedAt!.millisecondsSinceEpoch,
+    );
     await _prefs?.remove('reminderShown3');
     await _prefs?.remove('reminderShown1');
     _changedWithNotifs();
@@ -590,7 +637,9 @@ class Entitlements extends ChangeNotifier {
     if (!kDebugMode) return;
     _trialStartedAt = DateTime.now().subtract(const Duration(days: 8));
     await _prefs?.setInt(
-        'trialStartMs', _trialStartedAt!.millisecondsSinceEpoch);
+      'trialStartMs',
+      _trialStartedAt!.millisecondsSinceEpoch,
+    );
     _changedWithNotifs();
   }
 

@@ -1,12 +1,12 @@
-// Cover art: 48 bundled dark mesh-gradient images. Every audio and playlist
-// gets one deterministically from its id, so the same track always looks the
-// same and two neighbours never repeat.
+// Cover art: 68 bundled dark gradient images (48 photographic/mesh, 20
+// patterned). Every audio and playlist gets one deterministically from its id,
+// so the same track always looks the same and two neighbours never repeat.
 import 'package:flutter/material.dart';
 
 /// Neon accent used for glow, selection and primary CTAs.
 const Color kNeonBlue = Color(0xFF2C8BFF);
 
-const int coverCount = 48;
+const int coverCount = 68;
 
 /// Shadow tints, one per image index, used for the neon bloom.
 const List<Color> _accents = [

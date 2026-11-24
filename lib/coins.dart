@@ -178,18 +178,6 @@ class CoinWallet extends ChangeNotifier {
     return total;
   }
 
-  bool get extraTracksActive => bonusTracks > 0;
-
-  DateTime? get extraTracksUntil {
-    DateTime? latest;
-    for (final p
-        in perks.where((p) => p.bonusTracks > 0 && isPerkActive(p.id))) {
-      final u = perkUntil(p.id);
-      if (u != null && (latest == null || u.isAfter(latest))) latest = u;
-    }
-    return latest;
-  }
-
   /// Extra playlist slots from all active playlist perks (additive).
   int get bonusPlaylists {
     int total = 0;

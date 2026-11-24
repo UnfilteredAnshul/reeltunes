@@ -288,7 +288,8 @@ async function removeEffects(code, removed) {
       ? `Remove Pro from every device that redeemed ${code}? ` +
         'Redemptions and the code itself stay; the Pro it granted is switched ' +
         'off the next time the app opens.'
-      : `Switch the Pro from ${code} back on for its redeeming devices?`,
+      : `Switch the Pro from ${code} back on? Every device that redeemed it ` +
+        'regains the time it had left the next time the app opens.',
   );
   if (!ok) return;
   const res = await api(
@@ -298,7 +299,11 @@ async function removeEffects(code, removed) {
   if (!res.ok) {
     return toast(res.message || 'Could not update effects');
   }
-  toast(removed ? `${code} effects removed` : `${code} effects restored`);
+  toast(
+    removed
+      ? `${code} effects removed — devices apply it on their next open`
+      : `${code} effects restored — devices get it back on their next open`,
+  );
   await load(true);
 }
 

@@ -4,13 +4,13 @@
 - **Name:** ReelTunes · `applicationId com.buildwithanshul.reeltunes` (permanent — cannot change after the first Play upload) · Dart package `reel_tune` · project folder `E:\Projects\ReelTune`.
 - **What it is:** Android Flutter music player for short-form video audio. Paste a TikTok / Instagram Reel / YouTube Shorts link → audio is extracted **on-device** by a bundled CPython + yt-dlp engine → the file is written into the user's own audios folder and played offline with loop/shuffle controls. Also imports existing phone media through SAF (videos play their own audio, nothing copied).
 - **Pitch:** 100% on-device library. No cloud, no login, no user database. The audios folder is the source of truth: drop a song in with a file manager and it appears; uninstall the app and the files plus a portable copy of the playlists stay behind.
-- **Production status (2026-11-15):** **live on Google Play.** versionCode 11 is published; 12 was built and uploaded with Google's test ad units baked in (`ADMOB_TEST_ADS=true`). Next upload is **0.0.4+13**. Privacy policy, terms, Data safety, content rating and ads declarations are done. Open console work: AdMob "limited ad serving", app-ads.txt, UMP consent form.
+- **Production status (2026-11-24):** live on Google Play (versionCode 11 published). 12 was an internal test-ads upload; **`0.0.6+15` is the current upload candidate**, built with **live ad units** (no `ADMOB_TEST_ADS`). 13/14 existed only as local builds. Privacy policy, terms, Data safety, content rating and ads declarations are done. Open console work: AdMob "limited ad serving", app-ads.txt, UMP consent form.
 - **Owner's standing rules:** short answers, no emoji; sizes in % / rem / em, px only for borders and shadows; accent `kNeonBlue` `#2C8BFF` on an "Acoustic Blue" dark background; never build or push without being asked; the agent never runs UI tests (no screenshots); never build release with the RevenueCat test key — always `goog_cGOTfYvUekciFKVVNAqpWNosUKV`; bump versionCode **and** versionName on every Play upload.
 
 ## Tech Stack
 - **Flutter** 3.47.8 (`C:\src\flutter\bin`), Material 3, Dart `^3.9.0`.
 - **Android:** `minSdk 24`, `targetSdk 36`, SDK 36 at `E:\Android\Sdk`, NDK 28.2.13676358, JDK from Android Studio.
-- **Deps (pubspec.yaml):** `just_audio` ^0.10, `audio_session` ^0.2.4, `receive_intent`, `reorderable_grid_view` 2.2.8, `path_provider`, `shared_preferences`, `url_launcher` ^6.2, `file_picker` ^13 (fork: `pickFiles` returns `List<PlatformFile>`, `getDirectoryPath()`), `purchases_flutter` 11.0.0 (RevenueCat → Play Billing), `purchases_admob_flutter` 11.0.0 (impression/click reporting), **`google_mobile_ads` ^8.0.0** (AdMob + UMP), `pdf` ^3.11.3 (local purchase summary), `http` ^1.2.0 (promo codes), `cupertino_icons`.
+- **Deps (pubspec.yaml):** `just_audio` ^0.10, `audio_session` ^0.2.4, `receive_intent`, `reorderable_grid_view` 2.2.8, `path_provider`, `shared_preferences`, `url_launcher` ^6.2, `file_picker` ^13 (fork: `pickFiles` returns `List<PlatformFile>`, `getDirectoryPath()`), `purchases_flutter` 11.0.0 (RevenueCat → Play Billing), `purchases_admob_flutter` 11.0.0 (impression/click reporting), **`google_mobile_ads` ^8.0.0** (AdMob + UMP), `pdf` ^3.11.3 (local purchase summary), `http` ^1.2.0 (promo codes), `in_app_update` ^5.0.0 (Play update prompt), `cupertino_icons`.
   - **No `just_audio_background` / `audio_service`.** Both were removed; on ColorOS their service sometimes never reached `startForeground`, so the notification never appeared. The media session is Kotlin (`PlaybackService.kt`). `packages/` is empty, no `dependency_overrides`.
   - `flutter_local_notifications` was removed (13-19 fail to compile with AGP 9). Reminders use the native `ReminderScheduler` bridge.
 - **Removed:** `ytdlp_flutter` / `youtubedl-android` (GPL-3.0, ffmpeg payload). Nothing GPL ships except `libcrypt` (LGPL-2.1, unmodified, separate `.so`).
@@ -23,12 +23,12 @@
 - **Bottom sheets only** (ColorOS renders dialog scrims invisible). Only exception: the destructive confirmations that Android itself raises.
 - Splash = coin loader + "warming up your library…" only, minimum 1.4 s.
 - Display name **ReelTunes**; physical folder `ReelTune Audios` (deliberately different spelling, existing data).
-- **One sort+filter sheet:** left half SORT (Manual / Name / Date added + ascending), right half DATE ADDED (Any time / Today / Last 7 days / Last 30 days). Both apply live; `Icons.tune` turns primary when active. Default sort = date added newest first; default filter = empty. **Manual sort only inside playlists.** Reset button restores defaults.
+- **One sort sheet:** SORT (Manual / Name / Date added + ascending); applies live, `Icons.tune` turns primary when active. Default sort = date added newest first. **Manual sort only inside playlists.** Reset button restores defaults. (The old date-added filter half was removed as dead code — sorting covers it.)
 - **Playlists wording everywhere** (model is still `Folder`): chip strip, `Playlists (N)` header with `AnimatedRotation` chevron. List/grid toggle only while expanded.
 - **Guide:** dismissible banner → 7-step bottom sheet (also at the top of Settings).
 - **Idle nudge:** after 7 s of stillness the import FAB expands into the "Import audio" pill for ~1.8 s and repeats while idle; resets on any touch/scroll/search; paused while audio plays or the page isn't current. On Free the gold "Watch ad · +5" FAB does the same. Both pills are intrinsic-width inside a fixed-width right-aligned slot so **"Add reel" never moves**.
 - **Top toast** (`lib/top_toast.dart`): slides in under the status bar, 2.6 s, tap to dismiss, never blocks input. Replaces bottom snackbars for failures.
-- Cover art: 48 bundled dark mesh gradients (`assets/covers/`), picked deterministically from the track/folder id (`lib/cover_art.dart`, `coverIndexFor`).
+- Cover art: 68 bundled dark gradients (`assets/covers/` — 48 photographic/mesh, 20 patterned), picked deterministically from the track/folder id (`lib/cover_art.dart`, `coverIndexFor`).
 - Launcher icon: adaptive (`mipmap-anydpi-v26`), mark at 60% inside the 72 dp safe zone. Store icon `assets/play-store-icon-512.png`, feature graphic `assets/feature-graphic-1024x500.png`.
 
 ## Database Schema
@@ -44,9 +44,9 @@ No SQL. Two local stores + one mirrored file:
    - `source`: `'TikTok' | 'YouTube' | 'Instagram' | 'web'` (extracted) · `'file' | 'video'` (imported).
 2. **`.reeltunes-library.json`** inside the audios folder — portable mirror (folders + `{name,title,source,sourceUrl,durationMs,addedAtMs,folderIds}` + `trialStartMs` + `grant {untilMs,lifetime,code}`). Written ~700 ms after every library change and after a code redeem; read back on the first launch after a reinstall, matched by file name.
 3. **`Download/ReelTunes/consent.json`** — durable legal-acceptance copy written through the native `ConsentBridge` (survives reinstall). `SharedPreferences` keeps the fast copy.
-4. **SharedPreferences:** `themeMode`, `folderView`, `trackView`, `saveFolder`, `firstRunDone`, `rangeMin/rangeMax`, `confirmDelete`, `confirmRemove`, `playDuringCalls`, `sortBy`, `sortAsc`, `guideBannerDismissed`, `playlistsExpanded`, `loopHistory` (last 12 custom counts), `hiddenFileNames`, `trialStartMs`, `trialDeclined`, `proPurchased/proTrial/proWillRenew/proEndsMs/proProductId`, purchase history JSON, `grantUntilMs/grantLifetime/grantCode`, `promoCodes`, `promoLog`, `promoDeviceId`, `promoInstallId`, `lastTrackId`, `debugPro` / `debugFree`, consent keys, coin wallet keys. The old admin-token keys (`promoCodesToken`, `adminUnlocked`) are no longer read or written.
+4. **SharedPreferences:** `themeMode`, `folderView`, `trackView`, `firstRunDone`, `rangeMin/rangeMax`, `confirmDelete`, `confirmRemove`, `confirmPlaylistDelete`, `playDuringCalls`, `lowerVolumeForOtherAudio`, `surviveRecentsSwipe`, `sortBy`, `sortAsc`, `guideBannerDismissed`, `playlistsExpanded`, `loopHistory` (last 12 custom counts), `hiddenFileNames`, `trialStartMs`, `trialDeclined`, `proPurchased/proTrial/proWillRenew/proEndsMs/proProductId`, purchase history JSON, `grantUntilMs/grantLifetime/grantCode/grantEffectsRemoved`, `promoCodes`, `promoLog`, `promoDeviceId`, `promoInstallId`, `lastTrackId`, `recentTrackIds`, `debugPro` / `debugFree`, consent keys, coin wallet keys. The old admin-token keys (`promoCodesToken`, `adminUnlocked`) are no longer read or written.
    - Android-side prefs (`reeltunes_folder`): SAF tree URI + resolved root document id.
-   - Not persisted on purpose: search text, date filter.
+   - Not persisted on purpose: search text.
 
 ## Storage model (SAF audios folder)
 - The user links a folder once (`FolderBridge.link`, `ACTION_OPEN_DOCUMENT_TREE`, read+write persistable grant). If they pick `Download`, the app steps into / creates `ReelTune Audios`.
@@ -65,39 +65,42 @@ No SQL. Two local stores + one mirrored file:
 - **Dart side:** `lib/engine.dart` (channel wrapper), `lib/extractor.dart` (naming, cache→folder save, Track creation). **yt-dlp updates only ship through Play releases.**
 
 ## Auth Flow
-None — no account, no login. Playback/library access is anonymous. The plan (Free / trial / Pro) comes from `lib/entitlements.dart` (trial clock + store state + code grants); purchases go through RevenueCat → Play Billing (`lib/billing.dart`). Code grants are server-validated by the Cloudflare Worker; the app only ever holds `grantUntilMs / grantLifetime / grantCode`.
+None — no account, no login. Playback/library access is anonymous. The plan (Free / trial / Pro) comes from `lib/entitlements.dart` (trial clock + store state + code grants); purchases go through RevenueCat → Play Billing (`lib/billing.dart`). Code grants are server-validated by the Cloudflare Worker; the app only ever holds `grantUntilMs / grantLifetime / grantCode / grantEffectsRemoved`.
 
 ## Routing (screens)
 Bottom navigation: **Home / Library / Search / More**.
 
-- **RootScreen (main.dart)** — instant `runApp`; store init + ≥1.4 s splash; `LibrarySync.init()`; legal consent gate (`ConsentService.load()` → `showConsentDialog` when `needsAgreement`); first-run `FirstRunSheet` when nothing is linked; share-intent listener; lifecycle observer re-scans and calls `PromoEngine.syncGrantEffects()`. `IndexedStack` of the 4 nav screens with `BottomNavigationBar` (accent `#2C8BFF`).
+- **RootScreen (main.dart)** — instant `runApp`; store init + ≥1.4 s splash; `LibrarySync.init()`; legal consent gate (`ConsentService.load()` → `showConsentDialog` when `needsAgreement`); first-run `FirstRunSheet` when nothing is linked; share-intent listener; lifecycle observer re-scans and calls `PromoEngine.syncGrantEffects()`; one Play in-app update check per process after launch (`lib/update_check.dart`, silently skipped on sideloaded builds). `IndexedStack` of the 4 nav screens with `BottomNavigationBar` (accent `#2C8BFF`).
 - **HomeScreen** — featured banner, recently played, playlists, import FAB column, "Add reel" FAB. AppBar: Settings + coin shop (Free only).
 - **LibraryScreen** — always-visible search bar, filter chips, playlist chip strip, tracks list/grid.
 - **SearchScreen** — same library content with search pre-focused.
-- **SettingsScreen** — Appearance, storage, playback, survive-recents-swipe, privacy (Ad privacy choices), legal, Pro card, redeem code, restore purchases, reminders, debug tiers. **No code dashboard row — admin is web only.**
-- **PlayerSheet** — caption, title, source, slider, loop chips (Smart / Custom range; tapping the active chip = no loop), animated transport, queue. Listens to `AppStore` too, so a rename updates instantly.
+- **SettingsScreen** — Appearance, storage, playback (confirmations, keep playing during calls, lower volume for other audio, survive-recents-swipe), privacy (Ad privacy choices), legal, Pro card, redeem code, restore purchases, reminders, debug tiers. **No code dashboard row — admin is web only.**
+- **PlayerSheet** — caption, title, source, seek slider, **volume slider + speaker mute**, loop chips (Smart / Custom range; tapping the active chip = no loop), animated transport, queue. Free tier gets the banner in the strip below the controls (inside `SafeArea`, above the nav bar). Listens to `AppStore` too, so a rename updates instantly. Opening the page never starts playback; the play button starts the remembered track when nothing is loaded.
 - **AddReelSheet** — URL (+`initialUrl` from share), optional name, playlist multi-select, "Extract & save audio", "Or import an audio file instead". Rejects unsupported links (`linkProblem`) and asks Skip / Add anyway on duplicates.
 - Menus: track long-press (rearrange / rename / playlists / remove / delete), playlist long-press (rearrange / shuffle / rename / emoji / delete), sort & filter, guide, folder create, delete/remove confirmations, duplicate import/link sheets.
 
 ## Components / Lib (per file)
 ### lib/entitlements.dart
-- `Entitlements.I` (`ChangeNotifier`) — single source of truth for the plan. Trial clock (`trialStartMs`, 7 days, starts at first folder link, adopted from the mirror), `purchased` (+ expiry, 3-day offline grace), `billingTrial`, `willRenew`, `subscriptionEndsAt`, `debugPro`, `debugFree`, `isPro = !debugFree && (purchased || debugPro || codeGrantActive || trialActive)`, `capped`, `showAds` (`capped && !CoinWallet.adFree`), `maxTracks` (25 + coin bonus, up to 50), `maxPlaylists` (2), `canUseCustomRange`, Smart `smartMin/Max`, `importBlockReason`, `dueTrialReminder`, `setStoreEntitlement`, `statusLabel`, debug tier controls.
+- `Entitlements.I` (`ChangeNotifier`) — single source of truth for the plan. Trial clock (`trialStartMs`, 7 days, starts at first folder link, adopted from the mirror), `purchased` (+ expiry, 3-day offline grace), `billingTrial`, `willRenew`, `subscriptionEndsAt`, `debugPro`, `debugFree`, `isPro = !debugFree && (purchased || debugPro || codeGrantActive || trialActive)`, `capped`, `showAds` (`capped && !CoinWallet.adFree`), `maxTracks` (25 + coin bonus, up to 50), `maxPlaylists` (2), `canUseCustomRange`, Smart `smartMin/Max`, `importBlockReason`, `dueTrialReminder`, `setStoreEntitlement`, `statusLabel`, debug tier controls. Code grants: `codeGrantActive`, `grantCodeRaw` (survives a switch-off), `codeGrantEffectsRemoved` / `setCodeGrantEffectsRemoved` (dashboard claw-back), `setCodeGrant` / `clearCodeGrant`, `codeGrantMirror` / `adoptCodeGrant`.
 ### lib/billing.dart
 - RevenueCat wrapper. `init()` (no-op without `RC_ANDROID_KEY`), `refresh()`, `loadOfferings()`, `planView`, `annualSaving`, `packageFor`, `purchase`, `purchasePlan`, `restore`, `_mapError`, `_apply(CustomerInfo)` → `Entitlements.setStoreEntitlement`. `PurchaseReport{success,cancelled,pending,unavailable,failed}`.
 ### lib/models.dart
-- `Track`, `Folder` + JSON; enums `AppThemeMode`, `ViewMode`, `RtLoop`, `SortBy`, `DateFilter`; `AppStore.I` with tracks/folders, prefs, filters, Free cap (`_freeCapIds`), `hiddenByFreeCap`, `reorderVisibleTracks`, `trackById/BySourceUrl/ByFileName`, `addTrack`, `removeTrackKeepFile`, `removeTrack`, `save()` (local JSON + mirror).
+- `Track`, `Folder` + JSON; enums `AppThemeMode`, `ViewMode`, `RtLoop`, `SortBy`; `AppStore.I` with tracks/folders, prefs, filters, Free cap (`_freeCapIds`), `hiddenByFreeCap`, `reorderVisibleTracks`, `trackById/BySourceUrl/ByFileName`, `addTrack`, `removeTrackKeepFile`, `removeTrack`, `recentTrackIds` (newest first, dedup, cap 20; seeded from `lastTrackId`), `save()` (local JSON + mirror).
 ### lib/folder_access.dart
 - Dart wrapper for `com.buildwithanshul.reeltunes/folder`: `state`, `link`, `unlink`, `scan`, `save`, `readText`, `writeText`, `delete`; models `LinkedFolder`, `FolderFile`.
 ### lib/library_sync.dart
 - `init`, `link`, `unlink`, `sync`, `mirror`, `restoreIfEmpty`, `ensureFolderAccess()`, `reLinkFolder()`.
 ### lib/player.dart — `RtPlayer.I`
-- One process-wide `just_audio` player. `_boot()` creates the `AudioPlayer` after the session is configured; every op goes through `_whenReady()`. Looping: with a loop mode active every track is armed `LoopMode.one`; a position-wrap counter counts passes and the **final pass flips to `LoopMode.off` at its start**; `_targetLoops` random in `rangeMin..rangeMax` (Smart samples `loopHistory`, +1 under 30 s); queue end → seek(0) + play. `RtLoop.off` arms `LoopMode.off` immediately. `unawaited(_ap.play())` everywhere. `removeIfCurrent(id)` is index-surgical (queue fixed first, `_queueSurgery` guards platform events, then `removeAudioSourceAt`). The playlist is always **flat** (`setAudioSources([...], initialIndex:)`), never nested.
+- One process-wide `just_audio` player. `_boot()` creates the `AudioPlayer(handleInterruptions: false)` after the session is configured; every op goes through `_whenReady()`. Looping: with a loop mode active every track is armed `LoopMode.one`; a position-wrap counter counts passes and the **final pass flips to `LoopMode.off` at its start**; `_targetLoops` random in `rangeMin..rangeMax` (Smart samples `loopHistory`, +1 under 30 s); queue end → seek(0) + play. `RtLoop.off` arms `LoopMode.off` immediately. `unawaited(_ap.play())` everywhere. `removeIfCurrent(id)` is index-surgical (queue fixed first, `_queueSurgery` guards platform events, then `removeAudioSourceAt`). The playlist is always **flat** (`setAudioSources([...], initialIndex:)`), never nested.
+- Shuffle: one cycle = a permutation of the context (`_shuffled`), dealt by Fisher–Yates with `Random.secure()`; `_nextCycle` re-deals until the order differs from the cycle that just finished **and** does not open on the same audio. CSPRNG instead of a time seed is what killed "the second shuffle looked identical".
+- Audio focus: `_onInterruption` pauses by default; with "Keep playing during calls" on it holds the pass through a pause-type interruption by re-asserting `play()` every 700 ms (`_callHold`). **Nothing ever resumes on its own** when an interruption ends. A duck (notification / other app) triggers `_reclaimFocus()` (drop + re-request GAIN focus) unless "Lower volume for other audio" is on — that toggle is the notification attenuation fix.
+- `volume` 0..1 (`setVolume`, `toggleMute` with `_volumeBeforeMute`), session-only by design.
 - Pushes title/artist/art/position/playing state into `PlaybackNotification` (Kotlin `PlaybackService`); button callbacks come back through `handleCommand`.
 ### lib/media_notification.dart
 - `PlaybackNotification` — `MethodChannel('com.buildwithanshul.reeltunes/playback')`. `available` flag for Settings diagnostics, `onPlay/onPause/onToggle/onNext/onPrev/onSeek/onStop` callbacks, `show/update/hide`, and `handleCommand`. Dart owns playback; Kotlin owns only the session UI.
 ### lib/ads.dart
 - AdMob entry point. `Ads extends ChangeNotifier`; `init()` (idempotent) loads the unit preference, initializes `MobileAds`, runs the **UMP** flow, preloads rewarded + app-open. `privacyOptionsRequired()` / `showPrivacyOptions()` power Settings → Ad privacy choices (falls back to Google ad settings when AdMob has no form).
-- `AdBanner` — anchored **adaptive** banner (`getLargeAnchoredAdaptiveBannerAdSizeWithOrientation`) above the mini bar; the platform view is only made visible after `onAdLoaded`, with a `surface`-coloured `ColoredBox` behind it so no black bar shows while loading. 12 px gap from the mini bar (placement-policy safe). Retries on fail with backoff 30 s → 60 s → 2 min, resets on `AppLifecycleState.resumed` and on unit change.
+- `AdBanner` — anchored **adaptive** banner (`getLargeAnchoredAdaptiveBannerAdSizeWithOrientation`); used above the mini bar **and** in the bottom strip of the player page (Free only — `AdBanner` renders zero height for Pro). The platform view is only made visible after `onAdLoaded`, with a `surface`-coloured `ColoredBox` behind it so no black bar shows while loading. 12 px gap from the mini bar (placement-policy safe). Retries on fail with backoff 30 s → 60 s → 2 min, resets on `AppLifecycleState.resumed` and on unit change.
 - `PlaylistAdCard` — inline `AdSize.banner` in the lists.
 - `showRewarded()` / `showDownloadAd()` / `maybeShowAppOpen()` **wait for the ad to close** (`Completer` closed from `onAdDismissedFullScreenContent` / `onAdFailedToShowFullScreenContent`) before resolving, so the reward/coin path is never disposed early. `RewardedOutcome{earned, dismissed, failed}`.
 - Every step logs `RTADS: …` (request, loaded, impression, failed(code,msg), retry, rewarded earned/dismissed, app-open, init failure) — grep `RTADS` in logcat.
@@ -116,7 +119,7 @@ Bottom navigation: **Home / Library / Search / More**.
 ### lib/consent.dart
 - `ConsentService.I` + `showConsentDialog` — legal gate before any import/playback. Fast copy in prefs, durable copy in `Download/ReelTunes/consent.json` via the native `ConsentBridge` channel (`com.buildwithanshul.reeltunes/consent`). Accept = explicit button; no dismissal by tapping outside.
 ### lib/cover_art.dart · lib/ui.dart · lib/first_time_card.dart
-- `kNeonBlue`, 48 cover indices, glow helpers. `UiMetrics` sizing extension (see Design System). First-run card shown on Home.
+- `kNeonBlue`, 68 cover indices, glow helpers. `UiMetrics` sizing extension (see Design System). First-run card shown on Home.
 ### lib/top_toast.dart · lib/error_report.dart
 - Overlay top toast, single instance, slide+fade, tap to dismiss. `rootMessengerKey`, `reportError` (debugPrint + microtask-deferred single toast), `installErrorReporting`.
 ### lib/library.dart · lib/home_screen.dart · lib/sheets.dart · lib/main.dart · lib/settings_screen.dart
@@ -158,7 +161,7 @@ flutter build apk --release --target-platform android-arm64 --dart-define=RC_AND
 ```
 - **No build without explicit approval.** The user runs device tests; the agent reads logcat.
 - Local APKs use the upload key, so a Play-signed install must be **uninstalled** first (`adb uninstall com.buildwithanshul.reeltunes`) — that wipes app data; the folder mirror restores playlists.
-- **versionCode rule:** it comes from `pubspec.yaml` (`version: 0.0.4+13`). Play burns every uploaded code even if the release is deleted. Bump both `versionName` and the trailing code before every upload. Renaming an AAB does nothing.
+- **versionCode rule:** it comes from `pubspec.yaml` (`version: 0.0.6+15`). Play burns every uploaded code even if the release is deleted. Bump both `versionName` and the trailing code before every upload. Renaming an AAB does nothing.
 - Artifacts: `build\app\outputs\bundle\release\app-release.aab` (~112 MB), `build\app\outputs\flutter-apk\app-release.apk` (~61 MB arm64 release, ~157 MB debug 3-ABI).
 - Web deploys: `npx wrangler deploy --config worker/codes/wrangler.jsonc` and `npx wrangler deploy --config privacy/wrangler.jsonc`.
 
@@ -167,7 +170,7 @@ flutter build apk --release --target-platform android-arm64 --dart-define=RC_AND
 2. **ColorOS renders dialog scrims invisible** — use bottom sheets.
 3. **Sheet + keyboard** — `isScrollControlled` + `Padding(bottom: viewInsets.bottom)`.
 4. **Bottom sheets capture the store once** — wrap in `ListenableBuilder(AppStore.I)`.
-5. **Shuffle repeated across restarts** — seed `Random(now ^ salt)` per call.
+5. **Shuffle repeated** — a time-seeded `Random` could deal the same permutation twice. Now Fisher–Yates on `Random.secure()`, and `_nextCycle` re-deals unless the order and the opening audio both differ from the cycle just played.
 6. **`AudioPlayer.play()` completes when playback stops** — never await it; `unawaited(...)`.
 7. **Stale-APK install trap** — gate installs on a fresh "Built" line.
 8. **Error-reporter wedge** — never show a SnackBar synchronously in a frame; microtask + one at a time.
@@ -211,19 +214,28 @@ flutter build apk --release --target-platform android-arm64 --dart-define=RC_AND
 46. **Paywall said "Manage subscription" on a fresh install** — `isPro` is true before a folder is linked; added `Entitlements.paidPro` for the paywall's branch.
 47. **Rewarded ad played but no coins** — `Ad.show()` resolves when the ad is *presented*, not when it closes, so the old code disposed it immediately and the reward callback never fired. Fixed by awaiting a `Completer` closed from `onAdDismissedFullScreenContent` / `onAdFailedToShowFullScreenContent` in `showRewarded`, `showDownloadAd` and `maybeShowAppOpen`. Verified in logcat: `RTADS: rewarded earned`, `rewarded dismissed · earned=true`.
 48. **Banner showed a black bar** — a fixed 320×50 request left the platform view black while empty. Use the anchored adaptive size, mount the view only after `onAdLoaded`, and put a `surface`-coloured `ColoredBox` behind it. Gap to the mini bar raised to 12 px for placement-policy safety.
-49. **Live banners fail with `error 3` + `HTTP 403` while rewarded fills** — the AdMob **account** is under "limited ad serving"; the banner request is refused server-side. Not a code bug. Google's sample units ignore the limit, so release builds ship `ADMOB_TEST_ADS=true` until it lifts. Lifting needs a verified app, complete identity/payment checks, app-ads.txt on the developer-website domain, and real traffic.
+49. **Live banners fail with `error 3` + `HTTP 403` while rewarded fills** — the AdMob **account** is under "limited ad serving"; the banner request is refused server-side. Not a code bug. Google's sample units ignore the limit, so **local/phone builds ship `ADMOB_TEST_ADS=true`**; the Play bundle for 0.0.6+15 went out with live units to stay inside AdMob policy (banners simply do not fill until the account limit lifts). Lifting needs a verified app, complete identity/payment checks, app-ads.txt on the developer-website domain, and real traffic.
 50. **In-app code dashboard was still shipping as dead code** — its Settings entry was removed in `937bfee` (before version 9), but `lib/code_admin.dart` stayed in the repo and `PromoEngine` still carried the admin API. Deleted 2026-11-15; admin is web-only.
 51. **`test/widget_test.dart` was stale** — asserted the text "ReelTune", which no longer exists, and the app needs plugins + a 1.4 s splash. Replaced with `test/link_rules_test.dart`.
 52. **Dead top-level helpers** — `linkAllowed`, `currentPurchaseRecord`, `importAudioPickFolder`, `downloadErrorFor`, `firstRunDefaultPathHint`, `_dateFrom`, `_toggleSearch`, `_searchOpen`, `expandedWidth`, `emoji.dart` were unreferenced. Removed; `flutter analyze` went from 33 issues (2 warnings) to 27 infos, 0 errors/warnings.
+53. **Call playback went silent until the next audio** — `play()` is rejected while the call UI owns audio focus, so one attempt was not enough. "Keep playing during calls" now holds the pass with a 700 ms re-assert (`_callHold`), and headphone unplug clears the hold.
+54. **Music restarted by itself after reels / another app went quiet** — `_onInterruption` used to resume on interruption end. Removed: an interruption never starts playback; only the user does.
+55. **Tapping the mini bar auto-played** — `openPlayerPage(startPlayback: !loaded)`. Opening the page is a look; the play button starts the remembered track (`play(t, context: …)` when `current == null`).
+56. **Volume dipped on every WhatsApp notification** — the OS ducking the media stream for transient focus, not app code. `_reclaimFocus()` drops and re-requests GAIN focus on a duck; Settings → **Lower volume for other audio** (default **off**) restores the old soft dip.
+57. **No volume control on the big player** — slider + speaker button added; the button mutes (`_volumeBeforeMute`) and the icon flips to muted at 0.
+58. **Unticking a playlist asked "remove from playlist?"** — symmetric with adding, so it is silent now. Removing from ReelTunes / deleting the file still confirms.
+59. **Nested menu was a dead end** — the playlist picker only had swipe-to-dismiss. Added a back arrow (`showFolderPick` returns `true`) that reopens the track menu.
+60. **"Restore effects" did nothing** — the remove path called `clearCodeGrant()`, erasing `grantCode`, so the device could never be matched to the code again. Removing now only sets `grantEffectsRemoved` (grant, code and end time stay on disk); restore flips it off. Installs already hit by the old behaviour are rebuilt from the local redemption log (`_newestRedeemableLogEntry`).
+61. **Play in-app update prompt** — `in_app_update` checks once per process, Play-installed builds only; sideloaded builds and every failure are swallowed. So testers on Play builds get the prompt, local `adb install` builds do not.
 
 ## Release build (Play)
 - Upload keystore: `android/upload-keystore.jks` (alias `upload`), credentials in `android/key.properties`, both gitignored — **back them up**. Certificate SHA-256: `81:51:D7:9F:B1:00:2B:D4:3D:61:C8:4A:39:AB:0C:82:A7:9D:94:26:48:E0:4E:71:65:00:44:9A:52:E2:CB:05`.
-- Bundle command (add `--dart-define=ADMOB_TEST_ADS=true` while the account is throttled):
+- Bundle command (live ad units — do **not** put test units in a Play build):
   ```powershell
   flutter build appbundle --release --dart-define=RC_ANDROID_KEY=goog_cGOTfYvUekciFKVVNAqpWNosUKV
   ```
-- **Current artifact:** `build\app\outputs\bundle\release\app-release.aab` — versionName **0.0.4**, versionCode **13**, package `com.buildwithanshul.reeltunes`, ~112 MB. versionCode 11 is live; 12 was the test-ads upload.
-- Shipping test ad units to production is against AdMob policy. Keep such a build on internal/closed testing, or rebuild without the define once limited ad serving lifts.
+- **Current artifact:** `build\app\outputs\bundle\release\app-release.aab` — versionName **0.0.6**, versionCode **15**, package `com.buildwithanshul.reeltunes`, 112.3 MB. Play has 11 live and 12 (internal, test ads); 13/14 were local builds only.
+- Test ad units belong on internal/closed testing and on phone builds (`--dart-define=ADMOB_TEST_ADS=true`). Production gets live units (bug 49).
 - Play updates (same package + signature) keep the SAF grant, so users don't re-link after a normal update.
 
 ## Legal pages (privacy + terms)
@@ -238,7 +250,7 @@ flutter build apk --release --target-platform android-arm64 --dart-define=RC_AND
 - Worker `reeltunes-codes`, source `worker/codes/`, live at https://reeltunes-codes.buildwise.workers.dev. **The web dashboard is the only admin surface** (static `public/` assets + `/api/admin/*`), admin token pasted once into the browser and stored in localStorage.
 - D1 database `reeltunes-codes` (`52fe2891-0753-4787-95df-8a3d11c04ad7`), schema `worker/codes/schema.sql`: `codes`, `redemptions`, `redeem_attempts`, `master_devices`. `codes.effects_removed` powers "Remove effects".
 - App transport `lib/promo_api.dart`; rules/cache in `lib/promo.dart`. `redeem()` calls the Worker first and falls back to locally created codes when offline. Server codes are never cached as strings, so a revoked code cannot be replayed.
-- **Revoke vs Remove effects:** `revoked = 1` only blocks future redemptions; time already granted keeps running. `effects_removed = 1` is the claw-back: every device that redeemed the code drops that grant on its next launch/resume (`GET /api/grant?code=` → `syncGrantEffects`). The web dashboard shows an "effects off" badge and a `Remove effects` / `Restore effects` button per code.
+- **Revoke vs Remove effects:** `revoked = 1` only blocks future redemptions; time already granted keeps running. `effects_removed = 1` is the claw-back: `GET /api/grant?code=` → `syncGrantEffects`. Removing only **hides** the grant on the device (`grantEffectsRemoved`, code + end time stay on disk); restore flips it back with the exact remaining time, no re-entry. Devices that lost the grant to the old erase-on-remove behaviour are recovered from the local redemption log. The web dashboard shows an "effects off" badge and a `Remove effects` / `Restore effects` button per code, and both apply on the device's next open.
 - Secrets: `ADMIN_TOKEN` and optional `MASTER_CODE`. Never in the APK.
 - Redeploy: `npx wrangler deploy --config worker/codes/wrangler.jsonc`. Schema: `npx wrangler d1 execute reeltunes-codes --remote --file=… --config …`.
 - Rate limit 5/hour, 20/day per device; one redemption per code per device (unique index).
@@ -261,7 +273,7 @@ flutter build apk --release --target-platform android-arm64 --dart-define=RC_AND
 - **RevenueCat over a hand-rolled purchase server** — it verifies receipts with the Play Developer API and restores per Google account.
 - **Play owns the prices** — the paywall renders `storeProduct.priceString`.
 - **Download ad after the save, not before** — an ad before a slow extraction gets blamed for the wait. 60 s floor so a burst shows one ad.
-- **Ads live outside the playback path** — banner above the mini bar, in-list card, post-save interstitial. Nothing over the player.
+- **Ads live outside the playback path** — banner above the mini bar, in-list card, post-save interstitial, and the Free-only strip at the bottom of the player page. Nothing overlays the artwork or the transport controls.
 - **Queue surgery is index-aligned** — one flat engine playlist, state-first removal, guard flag while the platform catches up.
 
 ## Production readiness (open)
@@ -290,9 +302,9 @@ E:\Projects\ReelTune\
 │  ├─ FolderBridge.kt                          # SAF audios folder: link/scan/save/text/delete
 │  ├─ ConsentBridge.kt                         # durable consent.json via MediaStore
 │  └─ ReminderScheduler.kt · ReminderReceiver.kt · BootReceiver.kt
-├─ lib/ (33 files)
+├─ lib/ (34 files)
 │  ├─ main.dart · home_screen.dart · library.dart · sheets.dart · player.dart
-│  ├─ models.dart · ui.dart · cover_art.dart · top_toast.dart
+│  ├─ models.dart · ui.dart · cover_art.dart · top_toast.dart · update_check.dart
 │  ├─ entitlements.dart · billing.dart · purchase_record.dart · receipt_pdf.dart
 │  ├─ coins.dart · shop_sheet.dart
 │  ├─ ads.dart · ad_config.dart
@@ -303,7 +315,7 @@ E:\Projects\ReelTune\
 │  └─ settings_screen.dart · legal.dart · error_report.dart
 ├─ privacy/                                    # index.html + terms.html + icon set + wrangler.jsonc
 ├─ worker/codes/                               # src/index.js (D1 API) + public/ (dashboard + icons)
-├─ assets/play-store-icon-512.png · assets/feature-graphic-1024x500.png · assets/covers/ (48)
+├─ assets/play-store-icon-512.png · assets/feature-graphic-1024x500.png · assets/covers/ (68)
 ├─ test/link_rules_test.dart                   # only test: link allowlist rules
 ├─ tools/repack_engine.py                      # reproducible GPL strip of libpython.zip.so
 ├─ .scratch/build_web_icons.py                 # regenerates favicons/icons for both sites

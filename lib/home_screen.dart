@@ -61,7 +61,8 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     list.shuffle();
-    await RtPlayer.I.play(list.first, context: list, playingFrom: 'Shuffle');
+    await RtPlayer.I.play(list.first,
+        context: list, playingFrom: 'Shuffle', freshCycle: true);
     if (!mounted) return;
     openPlayerPage(
       context,
@@ -85,8 +86,10 @@ class _HomeScreenState extends State<HomeScreen> {
           listenable: Listenable.merge(
               [store, Entitlements.I, CoinWallet.I, RtPlayer.I]),
           builder: (context, _) {
-            final recent =
-                List<Track>.from(store.tracks.reversed).take(8).toList();
+            // Real listening history (newest first), not library order: the
+            // old `tracks.reversed` showed the newest *imports* and stayed
+            // frozen while you played.
+            final recent = store.recentTracks.take(8).toList();
             // visibleFolders respects the Free playlist cap — the old
             // `store.folders` call leaked the hidden ones.
             final playlists = store.visibleFolders;

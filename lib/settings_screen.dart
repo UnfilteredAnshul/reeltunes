@@ -128,7 +128,7 @@ class SettingsScreen extends StatelessWidget {
                 title: const Text('Confirm before removing'),
                 subtitle: const Text(
                     'Ask before an audio leaves your library (the file stays '
-                    'on your phone). Covers the track menu and playlist edits.'),
+                    'on your phone). Playlist edits never ask.'),
                 value: store.confirmRemove,
                 onChanged: (v) => store.setConfirmRemove(v),
               ),
@@ -148,6 +148,14 @@ class SettingsScreen extends StatelessWidget {
                     'comes in. Off = playback pauses on every call.'),
                 value: store.playDuringCalls,
                 onChanged: (v) => store.setPlayDuringCalls(v),
+              ),
+              SwitchListTile(
+                title: const Text('Lower volume for other audio'),
+                subtitle: const Text(
+                    'On = notifications, voice notes and other apps can duck the '
+                    'music briefly. Off = the volume stays level through them.'),
+                value: store.lowerVolumeForOtherAudio,
+                onChanged: (v) => store.setLowerVolumeForOtherAudio(v),
               ),
               SwitchListTile(
                 title: const Text('Let player survive recent swipe'),
@@ -368,7 +376,7 @@ class SettingsScreen extends StatelessWidget {
     final picked = await LibrarySync.link();
     if (!context.mounted) return;
     if (picked == null) return;
-    store.completeFirstRun(picked.name ?? defaultSaveFolderName);
+    store.completeFirstRun();
     showTopToast(context,
         'Folder linked — ${picked.name ?? defaultSaveFolderName}');
   }

@@ -390,7 +390,7 @@ class _AddReelSheetState extends State<AddReelSheet> {
 }
 
 // ---------------------------------------------------------------------------
-// Folder creation with emoji
+// Folder creation
 // ---------------------------------------------------------------------------
 
 /// Opens the create-folder sheet. Bottom sheet (not dialog) — dialogs were
@@ -516,26 +516,43 @@ Future<String?> showInputSheet(
 }
 
 /// Multi-select folder membership for a track. Every tick applies instantly —
-/// there is no Save step.
-Future<void> showFolderPick(BuildContext context, Track t) {
-  return showModalBottomSheet<void>(
+/// there is no Save step, no confirmation on either direction (adding and
+/// removing are equally reversible, so neither asks).
+///
+/// Returns true when the user pressed the back arrow instead of closing the
+/// sheet, so the caller can put the track menu back where they came from.
+Future<bool> showFolderPick(BuildContext context, Track t) async {
+  final back = await showModalBottomSheet<bool>(
     context: context,
     showDragHandle: true,
     useSafeArea: true,
     isScrollControlled: true,
     builder: (sheetCtx) => StatefulBuilder(
       builder: (sheetCtx, setSheetState) => Padding(
-        padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+        padding: const EdgeInsets.fromLTRB(12, 0, 24, 24),
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment:
             CrossAxisAlignment.stretch, children: [
-          Text('Choose playlists',
-              style: Theme.of(sheetCtx)
-                  .textTheme
-                  .titleLarge
-                  ?.copyWith(fontWeight: FontWeight.w600)),
-          const SizedBox(height: 8),
-          Text('Tap a playlist to add or remove — it saves straight away.',
-              style: Theme.of(sheetCtx).textTheme.bodySmall),
+          Row(children: [
+            IconButton(
+              tooltip: 'Back',
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.arrow_back),
+              onPressed: () => Navigator.pop(sheetCtx, true),
+            ),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Text('Choose playlists',
+                  style: Theme.of(sheetCtx)
+                      .textTheme
+                      .titleLarge
+                      ?.copyWith(fontWeight: FontWeight.w600)),
+            ),
+          ]),
+          Padding(
+            padding: const EdgeInsets.only(left: 12),
+            child: Text('Tap a playlist to add or remove — it saves straight away.',
+                style: Theme.of(sheetCtx).textTheme.bodySmall),
+          ),
           const SizedBox(height: 8),
           Flexible(
             child: ConstrainedBox(
@@ -549,12 +566,8 @@ Future<void> showFolderPick(BuildContext context, Track t) {
                 for (final f in AppStore.I.folders)
                   CheckboxListTile(
                     value: t.folderIds.contains(f.id),
-                    onChanged: (v) async {
+                    onChanged: (v) {
                       final add = v == true;
-                      if (!add && AppStore.I.confirmRemove) {
-                        final ok = await _confirmPlaylistRemoval(sheetCtx, 1);
-                        if (ok != true || !sheetCtx.mounted) return;
-                      }
                       final next = <String>[
                         for (final id in t.folderIds)
                           if (id != f.id) id,
@@ -582,51 +595,11 @@ Future<void> showFolderPick(BuildContext context, Track t) {
       ),
     ),
   );
-}
-
-/// Confirm taking a track out of one (or more) playlists. Shares the
-/// "Confirm before removing" setting rather than adding a second one.
-Future<bool?> _confirmPlaylistRemoval(BuildContext context, int count) {
-  return showModalBottomSheet<bool>(
-    context: context,
-    showDragHandle: true,
-    builder: (sheetCtx) => Padding(
-      padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Text('Remove from playlist?',
-              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 18)),
-          const SizedBox(height: 8),
-          Text(
-            count == 1
-                ? 'This audio will leave the playlist you unticked. The audio '
-                    'itself stays in your library.'
-                : 'This audio will leave $count playlists you unticked. The '
-                    'audio itself stays in your library.',
-            style: Theme.of(sheetCtx).textTheme.bodySmall,
-          ),
-          const SizedBox(height: 16),
-          Row(children: [
-            TextButton(
-              onPressed: () => Navigator.pop(sheetCtx, false),
-              child: const Text('Cancel'),
-            ),
-            const Spacer(),
-            FilledButton(
-              onPressed: () => Navigator.pop(sheetCtx, true),
-              child: const Text('Remove'),
-            ),
-          ]),
-        ],
-      ),
-    ),
-  );
+  return back == true;
 }
 
 // ---------------------------------------------------------------------------
-// Folder menu + emoji editor
+// Folder menu
 // ---------------------------------------------------------------------------
 
 enum _FolderMenuAction { rearrange, shuffle, rename, delete }
@@ -687,7 +660,7 @@ Future<void> showFolderMenu(BuildContext context, Folder f,
       } else {
         list.shuffle(); // random entry point, then the player shuffles too
         await RtPlayer.I.play(list.first,
-            context: list, playingFrom: f.name);
+            context: list, playingFrom: f.name, freshCycle: true);
         if (!context.mounted) return;
         // Bring the player up so the user sees what's playing.
         openPlayerPage(
@@ -1104,12 +1077,13 @@ class PlayerSheet extends StatefulWidget {
 
 class _PlayerSheetState extends State<PlayerSheet> {
   /// Same long-press menu as the library list, from the player's 3-dot button.
-  /// If the action removes or deletes the track, the screen has nothing left to
-  /// show, so it closes.
+  /// Removing the audio playing does NOT close this page any more: the player
+  /// moves on to the next queue row by itself and the sheet follows it. It only
+  /// closes when the library is empty, because then there is nothing to show.
   Future<void> _openTrackMenu(Track t) async {
     await showTrackMenu(context, t);
     if (!mounted) return;
-    if (AppStore.I.trackById(t.id) == null) Navigator.pop(context);
+    if (AppStore.I.tracks.isEmpty) Navigator.pop(context);
   }
 
   @override
@@ -1209,7 +1183,37 @@ class _PlayerSheetState extends State<PlayerSheet> {
                   );
                 },
               ),
-              const SizedBox(height: 8),
+              // Volume: speaker tap mutes at 0 and restores the old level;
+              // dragging to 0 flips the icon to muted at the same time.
+              Row(children: [
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  tooltip: player.volume > 0 ? 'Mute' : 'Unmute',
+                  onPressed: () => player.toggleMute(),
+                  icon: Icon(
+                    player.volume > 0
+                        ? Icons.volume_up_rounded
+                        : Icons.volume_off_rounded,
+                    color: player.volume > 0
+                        ? scheme.primary
+                        : scheme.onSurfaceVariant,
+                  ),
+                ),
+                Expanded(
+                  child: Slider(
+                    value: player.volume.clamp(0.0, 1.0),
+                    onChanged: (v) => player.setVolume(v),
+                  ),
+                ),
+                SizedBox(
+                  width: 44,
+                  child: Text('${(player.volume * 100).round()}%',
+                      textAlign: TextAlign.end,
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: scheme.onSurfaceVariant)),
+                ),
+              ]),
+              const SizedBox(height: 4),
               Text('Advanced Looping',
                   style: Theme.of(context)
                       .textTheme
@@ -1286,7 +1290,21 @@ class _PlayerSheetState extends State<PlayerSheet> {
                     child: IconButton(
                       color: scheme.onPrimary,
                       iconSize: 38,
-                      onPressed: () => player.toggle(),
+                      onPressed: () {
+                        if (player.current == null) {
+                          // Nothing loaded (opened from the mini bar after a
+                          // launch): the play button starts the remembered
+                          // track with the library as its queue.
+                          player.play(
+                            t,
+                            context: widget.contextTracks.isEmpty
+                                ? AppStore.I.visibleTracksSorted.toList()
+                                : widget.contextTracks,
+                          );
+                        } else {
+                          player.toggle();
+                        }
+                      },
                       // Engine-driven state + a real transition, so the
                       // glyph can never stay stuck on ▶ while audio plays.
                       icon: AnimatedSwitcher(
@@ -1423,6 +1441,16 @@ Future<void> openPlayerPage(
           track: track,
           contextTracks: contextTracks,
           startPlayback: startPlayback,
+        ),
+        // Free tier only: AdBanner renders zero height for Pro, so this is
+        // simply the empty strip under the controls filled in. The SafeArea +
+        // 8 px keep it clear of the system navigation bar.
+        bottomNavigationBar: SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: const AdBanner(),
+          ),
         ),
       ),
     ),
